@@ -49,12 +49,12 @@
 
 using namespace dealii;
 
-namespace Step26
+namespace TimeIntegrationSchemes
 {
   /**
    * Interface class for time integration.
    */
-  class TimeIntegrationScheme
+  class Interface
   {
   public:
     virtual void
@@ -69,14 +69,13 @@ namespace Step26
   /**
    * One-step-theta method implementation according to step-26.
    */
-  class TimeIntegrationSchemeOneStepTheta : public TimeIntegrationScheme
+  class OneStepTheta : public Interface
   {
   public:
-    TimeIntegrationSchemeOneStepTheta(
-      const SparseMatrix<double> &mass_matrix,
-      const SparseMatrix<double> &laplace_matrix,
-      const std::function<void(const double, Vector<double> &)>
-        &evaluate_rhs_function)
+    OneStepTheta(const SparseMatrix<double> &mass_matrix,
+                 const SparseMatrix<double> &laplace_matrix,
+                 const std::function<void(const double, Vector<double> &)>
+                   &evaluate_rhs_function)
       : theta(0.5)
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
@@ -189,14 +188,13 @@ namespace Step26
   /**
    * IRK implementation.
    */
-  class TimeIntegrationSchemeIRK : public TimeIntegrationScheme
+  class IRK : public Interface
   {
   public:
-    TimeIntegrationSchemeIRK(
-      const SparseMatrix<double> &mass_matrix,
-      const SparseMatrix<double> &laplace_matrix,
-      const std::function<void(const double, Vector<double> &)>
-        &evaluate_rhs_function)
+    IRK(const SparseMatrix<double> &mass_matrix,
+        const SparseMatrix<double> &laplace_matrix,
+        const std::function<void(const double, Vector<double> &)>
+          &evaluate_rhs_function)
       : theta(0.5)
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
@@ -289,9 +287,12 @@ namespace Step26
     const std::function<void(const double, Vector<double> &)>
       evaluate_rhs_function;
   };
+} // namespace TimeIntegrationSchemes
 
 
 
+namespace Step26
+{
   template <int dim>
   class HeatEquation
   {
@@ -334,17 +335,18 @@ namespace Step26
                                             constraints);
       };
 
-      std::unique_ptr<TimeIntegrationScheme> time_integration_scheme;
+      std::unique_ptr<TimeIntegrationSchemes::Interface>
+        time_integration_scheme;
 
       if (true /*use one-step-theta method*/)
         time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemeOneStepTheta>(
+          std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
             mass_matrix, laplace_matrix, evaluate_rhs_function);
       else /*use IRK method*/
         time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemeIRK>(mass_matrix,
-                                                     laplace_matrix,
-                                                     evaluate_rhs_function);
+          std::make_unique<TimeIntegrationSchemes::IRK>(mass_matrix,
+                                                        laplace_matrix,
+                                                        evaluate_rhs_function);
 
       while (time <= 0.5)
         {
