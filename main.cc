@@ -195,8 +195,7 @@ namespace TimeIntegrationSchemes
         const SparseMatrix<double> &laplace_matrix,
         const std::function<void(const double, Vector<double> &)>
           &evaluate_rhs_function)
-      : theta(0.5)
-      , mass_matrix(mass_matrix)
+      : mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
     {}
@@ -237,6 +236,7 @@ namespace TimeIntegrationSchemes
                 << std::endl;
 
       // TODO: accumulate result in solution
+      (void)system_solution;
       (void)solution;
     }
 
@@ -272,14 +272,12 @@ namespace TimeIntegrationSchemes
       void
       vmult(BlockVector<double> &dst, const BlockVector<double> &src) const
       {
-        dst = src; // TODO: for the first try we use the identity matrix
+        dst = src; // TODO: for the first try, we use the identity matrix
                    // as preconditioner
       }
 
     private:
     };
-
-    const double theta;
 
     const SparseMatrix<double> &mass_matrix;
     const SparseMatrix<double> &laplace_matrix;
@@ -291,22 +289,23 @@ namespace TimeIntegrationSchemes
 
 
 
-namespace Step26
+namespace HeatEquation
 {
   template <int dim>
-  class HeatEquation
+  class Problem
   {
   public:
-    HeatEquation()
-      : fe(1)
+    Problem()
+      : fe(1 /*linear element*/)
       , dof_handler(triangulation)
-      , time_step(1. / 500)
+      , time_step(1. / 500 /*TODO: make time-step size a parameter*/)
     {}
 
     void
     run()
     {
-      const unsigned int n_refinements = 4;
+      const unsigned int n_refinements = 4; // TODO: make number of refinements
+      // a parameter
 
       GridGenerator::hyper_L(triangulation);
       triangulation.refine_global(n_refinements);
@@ -348,7 +347,7 @@ namespace Step26
                                                         laplace_matrix,
                                                         evaluate_rhs_function);
 
-      while (time <= 0.5)
+      while (time <= 0.5 /*TODO: make end time a parameter*/)
         {
           time += time_step;
           ++timestep_number;
@@ -487,16 +486,16 @@ namespace Step26
       const double period;
     };
   };
-} // namespace Step26
+} // namespace HeatEquation
+
+
 
 int
 main()
 {
   try
     {
-      using namespace Step26;
-
-      HeatEquation<2> heat_equation_solver;
+      HeatEquation::Problem<2> heat_equation_solver;
       heat_equation_solver.run();
     }
   catch (std::exception &exc)
