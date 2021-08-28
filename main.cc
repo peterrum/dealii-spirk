@@ -57,14 +57,14 @@ namespace Step26
   {
   public:
     HeatEquation();
+
     void
     run();
 
   private:
     void
     setup_system();
-    void
-    solve_time_step();
+
     void
     output_results() const;
 
@@ -111,6 +111,8 @@ namespace Step26
   RightHandSide<dim>::value(const Point<dim> & p,
                             const unsigned int component) const
   {
+    // TODO: adjust right-hand-side function
+
     (void)component;
     AssertIndexRange(component, 1);
     Assert(dim == 2, ExcNotImplemented());
@@ -135,28 +137,6 @@ namespace Step26
       }
     else
       return 0;
-  }
-
-
-
-  template <int dim>
-  class BoundaryValues : public Function<dim>
-  {
-  public:
-    virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const override;
-  };
-
-
-
-  template <int dim>
-  double
-  BoundaryValues<dim>::value(const Point<dim> & /*p*/,
-                             const unsigned int component) const
-  {
-    (void)component;
-    Assert(component == 0, ExcIndexRange(component, 0, 1));
-    return 0;
   }
 
 
@@ -321,12 +301,16 @@ namespace Step26
     {
       // TODO: create right-hand-side vector
       BlockVector<double> system_rhs;
-      BlockVector<double> system_solution;
 
       Assert(false, ExcNotImplemented());
       (void)timestep_number;
       (void)time;
       (void)time_step;
+
+      // TODO: create an initial guess
+      BlockVector<double> system_solution;
+
+      Assert(false, ExcNotImplemented());
 
       // solve system
       SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
@@ -344,7 +328,7 @@ namespace Step26
       std::cout << "     " << solver_control.last_step() << " CG iterations."
                 << std::endl;
 
-      // TODO: accumulate result in soltution
+      // TODO: accumulate result in solution
       (void)solution;
     }
 
@@ -423,6 +407,8 @@ namespace Step26
 
     constraints.clear();
     DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+    // note: program is limited to homogenous DBCs
     DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
     constraints.close();
 
@@ -486,6 +472,7 @@ namespace Step26
     time            = 0.0;
     timestep_number = 0;
 
+    // TODO: initial condition might need to be ajdusted
     VectorTools::interpolate(dof_handler,
                              Functions::ZeroFunction<dim>(),
                              solution);
