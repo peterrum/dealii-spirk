@@ -164,15 +164,15 @@ namespace Step26
   class TimeIntegrationScheme
   {
   public:
-    TimeIntegrationScheme(const DoFHandler<dim> &          dof_handler,
-                          const AffineConstraints<double> &constraints,
-                          const SparseMatrix<double> &     mass_matrix,
-                          const SparseMatrix<double> &     laplace_matrix)
+    TimeIntegrationScheme(
+      const SparseMatrix<double> &mass_matrix,
+      const SparseMatrix<double> &laplace_matrix,
+      const std::function<void(const double, Vector<double> &)>
+        &evaluate_rhs_function)
       : theta(0.5)
-      , dof_handler(dof_handler)
-      , constraints(constraints)
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
+      , evaluate_rhs_function(evaluate_rhs_function)
     {}
 
     void
@@ -190,51 +190,43 @@ namespace Step26
       Vector<double>       forcing_terms;
 
       system_matrix.reinit(mass_matrix.get_sparsity_pattern());
-      system_rhs.reinit(dof_handler.n_dofs());
-      tmp.reinit(dof_handler.n_dofs());
-      forcing_terms.reinit(dof_handler.n_dofs());
+      system_rhs.reinit(solution.size());
+      tmp.reinit(solution.size());
+      forcing_terms.reinit(solution.size());
 
       // create right-hand-side vector
+      // ... old solution
       mass_matrix.vmult(system_rhs, solution);
-
       laplace_matrix.vmult(tmp, solution);
       system_rhs.add(-(1 - theta) * time_step, tmp);
 
-      RightHandSide<dim> rhs_function;
-      rhs_function.set_time(time);
-      VectorTools::create_right_hand_side(dof_handler,
-                                          QGauss<dim>(
-                                            dof_handler.get_fe().degree + 1),
-                                          rhs_function,
-                                          tmp);
+      // ... rhs function (new)
+      evaluate_rhs_function(time, tmp);
       forcing_terms = tmp;
       forcing_terms *= time_step * theta;
 
-      rhs_function.set_time(time - time_step);
-      VectorTools::create_right_hand_side(dof_handler,
-                                          QGauss<dim>(
-                                            dof_handler.get_fe().degree + 1),
-                                          rhs_function,
-                                          tmp,
-                                          constraints);
-
+      // ... rhs function (old)
+      evaluate_rhs_function(time - time_step, tmp);
       forcing_terms.add(time_step * (1 - theta), tmp);
 
       system_rhs += forcing_terms;
 
-      // setup matrix
+      // setup system matrix
       system_matrix.copy_from(mass_matrix);
       system_matrix.add(theta * time_step, laplace_matrix);
 
+      // solve system
       SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
       SolverCG<Vector<double>> cg(solver_control);
 
-      SystemMatrix   sm(system_matrix);
+      // ... create operator
+      SystemMatrix sm(system_matrix);
+
+      // ... create preconditioner
       Preconditioner preconditioner(system_matrix);
 
+      // ... solve
       cg.solve(sm, solution, system_rhs, preconditioner);
-
-      constraints.distribute(solution);
 
       std::cout << "     " << solver_control.last_step() << " CG iterations."
                 << std::endl;
@@ -277,11 +269,11 @@ namespace Step26
 
     const double theta;
 
-    const DoFHandler<dim> &          dof_handler;
-    const AffineConstraints<double> &constraints;
-
     const SparseMatrix<double> &mass_matrix;
     const SparseMatrix<double> &laplace_matrix;
+
+    const std::function<void(const double, Vector<double> &)>
+      evaluate_rhs_function;
   };
 
 
@@ -380,8 +372,22 @@ namespace Step26
 
     output_results();
 
-    auto time_integration_scheme = std::make_unique<TimeIntegrationScheme<dim>>(
-      dof_handler, constraints, mass_matrix, laplace_matrix);
+    const auto evaluate_rhs_function = [&](const double    time,
+                                           Vector<double> &tmp) -> void {
+      RightHandSide<dim> rhs_function;
+      rhs_function.set_time(time);
+      VectorTools::create_right_hand_side(dof_handler,
+                                          QGauss<dim>(
+                                            dof_handler.get_fe().degree + 1),
+                                          rhs_function,
+                                          tmp,
+                                          constraints);
+    };
+
+    auto time_integration_scheme =
+      std::make_unique<TimeIntegrationScheme<dim>>(mass_matrix,
+                                                   laplace_matrix,
+                                                   evaluate_rhs_function);
 
     while (time <= 0.5)
       {
@@ -392,6 +398,8 @@ namespace Step26
                                        timestep_number,
                                        time,
                                        time_step);
+
+        constraints.distribute(solution);
 
         output_results();
       }
