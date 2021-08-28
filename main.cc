@@ -47,100 +47,10 @@
 #include <fstream>
 #include <iostream>
 
+using namespace dealii;
 
 namespace Step26
 {
-  using namespace dealii;
-
-  template <int dim>
-  class HeatEquation
-  {
-  public:
-    HeatEquation();
-
-    void
-    run();
-
-  private:
-    void
-    setup_system();
-
-    void
-    output_results() const;
-
-    Triangulation<dim> triangulation;
-    FE_Q<dim>          fe;
-    DoFHandler<dim>    dof_handler;
-
-    AffineConstraints<double> constraints;
-
-    SparsityPattern      sparsity_pattern;
-    SparseMatrix<double> mass_matrix;
-    SparseMatrix<double> laplace_matrix;
-
-    Vector<double> solution;
-    Vector<double> system_rhs;
-
-    double       time;
-    double       time_step;
-    unsigned int timestep_number;
-  };
-
-
-
-  template <int dim>
-  class RightHandSide : public Function<dim>
-  {
-  public:
-    RightHandSide()
-      : Function<dim>()
-      , period(0.2)
-    {}
-
-    virtual double
-    value(const Point<dim> &p, const unsigned int component = 0) const override;
-
-  private:
-    const double period;
-  };
-
-
-
-  template <int dim>
-  double
-  RightHandSide<dim>::value(const Point<dim> & p,
-                            const unsigned int component) const
-  {
-    // TODO: adjust right-hand-side function
-
-    (void)component;
-    AssertIndexRange(component, 1);
-    Assert(dim == 2, ExcNotImplemented());
-
-    const double time = this->get_time();
-    const double point_within_period =
-      (time / period - std::floor(time / period));
-
-    if ((point_within_period >= 0.0) && (point_within_period <= 0.2))
-      {
-        if ((p[0] > 0.5) && (p[1] > -0.5))
-          return 1;
-        else
-          return 0;
-      }
-    else if ((point_within_period >= 0.5) && (point_within_period <= 0.7))
-      {
-        if ((p[0] > -0.5) && (p[1] > 0.5))
-          return 1;
-        else
-          return 0;
-      }
-    else
-      return 0;
-  }
-
-
-
   /**
    * Interface class for time integration.
    */
@@ -383,141 +293,198 @@ namespace Step26
 
 
   template <int dim>
-  HeatEquation<dim>::HeatEquation()
-    : fe(1)
-    , dof_handler(triangulation)
-    , time_step(1. / 500)
-  {}
-
-
-
-  template <int dim>
-  void
-  HeatEquation<dim>::setup_system()
+  class HeatEquation
   {
-    dof_handler.distribute_dofs(fe);
+  public:
+    HeatEquation()
+      : fe(1)
+      , dof_handler(triangulation)
+      , time_step(1. / 500)
+    {}
 
-    std::cout << std::endl
-              << "===========================================" << std::endl
-              << "Number of active cells: " << triangulation.n_active_cells()
-              << std::endl
-              << "Number of degrees of freedom: " << dof_handler.n_dofs()
-              << std::endl
-              << std::endl;
+    void
+    run()
+    {
+      const unsigned int n_refinements = 4;
 
-    constraints.clear();
-    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+      GridGenerator::hyper_L(triangulation);
+      triangulation.refine_global(n_refinements);
 
-    // note: program is limited to homogenous DBCs
-    DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
-    constraints.close();
+      setup_system();
 
-    DynamicSparsityPattern dsp(dof_handler.n_dofs());
-    DoFTools::make_sparsity_pattern(dof_handler, dsp, constraints, true);
-    sparsity_pattern.copy_from(dsp);
+      time            = 0.0;
+      timestep_number = 0;
 
-    mass_matrix.reinit(sparsity_pattern);
-    laplace_matrix.reinit(sparsity_pattern);
+      // TODO: initial condition might need to be ajdusted
+      VectorTools::interpolate(dof_handler,
+                               Functions::ZeroFunction<dim>(),
+                               solution);
 
-    MatrixCreator::create_mass_matrix<dim, dim, double>(dof_handler,
-                                                        QGauss<dim>(fe.degree +
-                                                                    1),
-                                                        mass_matrix,
-                                                        nullptr,
-                                                        constraints);
-    MatrixCreator::create_laplace_matrix<dim, dim>(dof_handler,
-                                                   QGauss<dim>(fe.degree + 1),
-                                                   laplace_matrix,
-                                                   nullptr,
-                                                   constraints);
+      output_results();
 
-    solution.reinit(dof_handler.n_dofs());
-    system_rhs.reinit(dof_handler.n_dofs());
-  }
+      const auto evaluate_rhs_function = [&](const double    time,
+                                             Vector<double> &tmp) -> void {
+        RightHandSide rhs_function;
+        rhs_function.set_time(time);
+        VectorTools::create_right_hand_side(dof_handler,
+                                            QGauss<dim>(
+                                              dof_handler.get_fe().degree + 1),
+                                            rhs_function,
+                                            tmp,
+                                            constraints);
+      };
 
+      std::unique_ptr<TimeIntegrationScheme> time_integration_scheme;
 
+      if (true /*use one-step-theta method*/)
+        time_integration_scheme =
+          std::make_unique<TimeIntegrationSchemeOneStepTheta>(
+            mass_matrix, laplace_matrix, evaluate_rhs_function);
+      else /*use IRK method*/
+        time_integration_scheme =
+          std::make_unique<TimeIntegrationSchemeIRK>(mass_matrix,
+                                                     laplace_matrix,
+                                                     evaluate_rhs_function);
 
-  template <int dim>
-  void
-  HeatEquation<dim>::output_results() const
-  {
-    DataOut<dim> data_out;
+      while (time <= 0.5)
+        {
+          time += time_step;
+          ++timestep_number;
 
-    data_out.attach_dof_handler(dof_handler);
-    data_out.add_data_vector(solution, "U");
+          time_integration_scheme->solve(solution,
+                                         timestep_number,
+                                         time,
+                                         time_step);
 
-    data_out.build_patches();
+          constraints.distribute(solution);
 
-    data_out.set_flags(DataOutBase::VtkFlags(time, timestep_number));
+          output_results();
+        }
+    }
 
-    const std::string filename =
-      "solution-" + Utilities::int_to_string(timestep_number, 3) + ".vtk";
-    std::ofstream output(filename);
-    data_out.write_vtk(output);
-  }
+  private:
+    void
+    setup_system()
+    {
+      dof_handler.distribute_dofs(fe);
 
+      std::cout << std::endl
+                << "===========================================" << std::endl
+                << "Number of active cells: " << triangulation.n_active_cells()
+                << std::endl
+                << "Number of degrees of freedom: " << dof_handler.n_dofs()
+                << std::endl
+                << std::endl;
 
+      constraints.clear();
+      DoFTools::make_hanging_node_constraints(dof_handler, constraints);
 
-  template <int dim>
-  void
-  HeatEquation<dim>::run()
-  {
-    const unsigned int n_refinements = 4;
+      // note: program is limited to homogenous DBCs
+      DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
+      constraints.close();
 
-    GridGenerator::hyper_L(triangulation);
-    triangulation.refine_global(n_refinements);
+      DynamicSparsityPattern dsp(dof_handler.n_dofs());
+      DoFTools::make_sparsity_pattern(dof_handler, dsp, constraints, true);
+      sparsity_pattern.copy_from(dsp);
 
-    setup_system();
+      mass_matrix.reinit(sparsity_pattern);
+      laplace_matrix.reinit(sparsity_pattern);
 
-    time            = 0.0;
-    timestep_number = 0;
+      MatrixCreator::create_mass_matrix<dim, dim, double>(dof_handler,
+                                                          QGauss<dim>(
+                                                            fe.degree + 1),
+                                                          mass_matrix,
+                                                          nullptr,
+                                                          constraints);
+      MatrixCreator::create_laplace_matrix<dim, dim>(dof_handler,
+                                                     QGauss<dim>(fe.degree + 1),
+                                                     laplace_matrix,
+                                                     nullptr,
+                                                     constraints);
 
-    // TODO: initial condition might need to be ajdusted
-    VectorTools::interpolate(dof_handler,
-                             Functions::ZeroFunction<dim>(),
-                             solution);
+      solution.reinit(dof_handler.n_dofs());
+      system_rhs.reinit(dof_handler.n_dofs());
+    }
 
-    output_results();
+    void
+    output_results() const
+    {
+      DataOut<dim> data_out;
 
-    const auto evaluate_rhs_function = [&](const double    time,
-                                           Vector<double> &tmp) -> void {
-      RightHandSide<dim> rhs_function;
-      rhs_function.set_time(time);
-      VectorTools::create_right_hand_side(dof_handler,
-                                          QGauss<dim>(
-                                            dof_handler.get_fe().degree + 1),
-                                          rhs_function,
-                                          tmp,
-                                          constraints);
-    };
+      data_out.attach_dof_handler(dof_handler);
+      data_out.add_data_vector(solution, "U");
 
-    std::unique_ptr<TimeIntegrationScheme> time_integration_scheme;
+      data_out.build_patches();
 
-    if (true /*use one-step-theta method*/)
-      time_integration_scheme =
-        std::make_unique<TimeIntegrationSchemeOneStepTheta>(
-          mass_matrix, laplace_matrix, evaluate_rhs_function);
-    else /*use IRK method*/
-      time_integration_scheme =
-        std::make_unique<TimeIntegrationSchemeIRK>(mass_matrix,
-                                                   laplace_matrix,
-                                                   evaluate_rhs_function);
+      data_out.set_flags(DataOutBase::VtkFlags(time, timestep_number));
 
-    while (time <= 0.5)
+      const std::string filename =
+        "solution-" + Utilities::int_to_string(timestep_number, 3) + ".vtk";
+      std::ofstream output(filename);
+      data_out.write_vtk(output);
+    }
+
+    Triangulation<dim> triangulation;
+    FE_Q<dim>          fe;
+    DoFHandler<dim>    dof_handler;
+
+    AffineConstraints<double> constraints;
+
+    SparsityPattern      sparsity_pattern;
+    SparseMatrix<double> mass_matrix;
+    SparseMatrix<double> laplace_matrix;
+
+    Vector<double> solution;
+    Vector<double> system_rhs;
+
+    double       time;
+    double       time_step;
+    unsigned int timestep_number;
+
+    class RightHandSide : public Function<dim>
+    {
+    public:
+      RightHandSide()
+        : Function<dim>()
+        , period(0.2)
+      {}
+
+      virtual double
+      value(const Point<dim> & p,
+            const unsigned int component = 0) const override
       {
-        time += time_step;
-        ++timestep_number;
+        // TODO: adjust right-hand-side function
 
-        time_integration_scheme->solve(solution,
-                                       timestep_number,
-                                       time,
-                                       time_step);
+        (void)component;
+        AssertIndexRange(component, 1);
+        Assert(dim == 2, ExcNotImplemented());
 
-        constraints.distribute(solution);
+        const double time = this->get_time();
+        const double point_within_period =
+          (time / period - std::floor(time / period));
 
-        output_results();
+        if ((point_within_period >= 0.0) && (point_within_period <= 0.2))
+          {
+            if ((p[0] > 0.5) && (p[1] > -0.5))
+              return 1;
+            else
+              return 0;
+          }
+        else if ((point_within_period >= 0.5) && (point_within_period <= 0.7))
+          {
+            if ((p[0] > -0.5) && (p[1] > 0.5))
+              return 1;
+            else
+              return 0;
+          }
+        else
+          return 0;
       }
-  }
+
+    private:
+      const double period;
+    };
+  };
 } // namespace Step26
 
 int
