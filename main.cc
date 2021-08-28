@@ -229,10 +229,10 @@ namespace Step26
       SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
       SolverCG<Vector<double>> cg(solver_control);
 
-      PreconditionSSOR<SparseMatrix<double>> preconditioner;
-      preconditioner.initialize(system_matrix, 1.0);
+      SystemMatrix   sm(system_matrix);
+      Preconditioner preconditioner(system_matrix);
 
-      cg.solve(system_matrix, solution, system_rhs, preconditioner);
+      cg.solve(sm, solution, system_rhs, preconditioner);
 
       constraints.distribute(solution);
 
@@ -241,6 +241,40 @@ namespace Step26
     }
 
   private:
+    class SystemMatrix
+    {
+    public:
+      SystemMatrix(const SparseMatrix<double> &system_matrix)
+        : system_matrix(system_matrix)
+      {}
+
+      void
+      vmult(Vector<double> &dst, const Vector<double> &src) const
+      {
+        system_matrix.vmult(dst, src);
+      }
+
+    private:
+      const SparseMatrix<double> &system_matrix;
+    };
+
+    class Preconditioner
+    {
+    public:
+      Preconditioner(const SparseMatrix<double> &system_matrix)
+        : system_matrix(system_matrix)
+      {}
+
+      void
+      vmult(Vector<double> &dst, const Vector<double> &src) const
+      {
+        system_matrix.precondition_SSOR(dst, src, 1.0);
+      }
+
+    private:
+      const SparseMatrix<double> &system_matrix;
+    };
+
     const double theta;
 
     const DoFHandler<dim> &          dof_handler;
