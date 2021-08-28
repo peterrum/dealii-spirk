@@ -30,6 +30,7 @@
 #include <deal.II/grid/tria.h>
 
 #include <deal.II/lac/affine_constraints.h>
+#include <deal.II/lac/block_vector.h>
 #include <deal.II/lac/dynamic_sparsity_pattern.h>
 #include <deal.II/lac/full_matrix.h>
 #include <deal.II/lac/precondition.h>
@@ -160,11 +161,28 @@ namespace Step26
 
 
 
-  template <int dim>
+  /**
+   * Interface class for time integration.
+   */
   class TimeIntegrationScheme
   {
   public:
-    TimeIntegrationScheme(
+    virtual void
+    solve(Vector<double> &   solution,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const = 0;
+  };
+
+
+
+  /**
+   * One-step-theta method implementation according to step-26.
+   */
+  class TimeIntegrationSchemeOneStepTheta : public TimeIntegrationScheme
+  {
+  public:
+    TimeIntegrationSchemeOneStepTheta(
       const SparseMatrix<double> &mass_matrix,
       const SparseMatrix<double> &laplace_matrix,
       const std::function<void(const double, Vector<double> &)>
@@ -179,7 +197,7 @@ namespace Step26
     solve(Vector<double> &   solution,
           const unsigned int timestep_number,
           const double       time,
-          const double       time_step) const
+          const double       time_step) const override
     {
       std::cout << "Time step " << timestep_number << " at t=" << time
                 << std::endl;
@@ -265,6 +283,108 @@ namespace Step26
 
     private:
       const SparseMatrix<double> &system_matrix;
+    };
+
+    const double theta;
+
+    const SparseMatrix<double> &mass_matrix;
+    const SparseMatrix<double> &laplace_matrix;
+
+    const std::function<void(const double, Vector<double> &)>
+      evaluate_rhs_function;
+  };
+
+
+
+  /**
+   * IRK implementation.
+   */
+  class TimeIntegrationSchemeIRK : public TimeIntegrationScheme
+  {
+  public:
+    TimeIntegrationSchemeIRK(
+      const SparseMatrix<double> &mass_matrix,
+      const SparseMatrix<double> &laplace_matrix,
+      const std::function<void(const double, Vector<double> &)>
+        &evaluate_rhs_function)
+      : theta(0.5)
+      , mass_matrix(mass_matrix)
+      , laplace_matrix(laplace_matrix)
+      , evaluate_rhs_function(evaluate_rhs_function)
+    {}
+
+    void
+    solve(Vector<double> &   solution,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const override
+    {
+      // TODO: create right-hand-side vector
+      BlockVector<double> system_rhs;
+      BlockVector<double> system_solution;
+
+      Assert(false, ExcNotImplemented());
+      (void)timestep_number;
+      (void)time;
+      (void)time_step;
+
+      // solve system
+      SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
+      SolverCG<BlockVector<double>> cg(solver_control);
+
+      // ... create operator
+      SystemMatrix sm(mass_matrix, laplace_matrix);
+
+      // ... create preconditioner
+      Preconditioner preconditioner;
+
+      // ... solve
+      cg.solve(sm, system_solution, system_rhs, preconditioner);
+
+      std::cout << "     " << solver_control.last_step() << " CG iterations."
+                << std::endl;
+
+      // TODO: accumulate result in soltution
+      (void)solution;
+    }
+
+  private:
+    class SystemMatrix
+    {
+    public:
+      SystemMatrix(const SparseMatrix<double> &mass_matrix,
+                   const SparseMatrix<double> &laplace_matrix)
+        : mass_matrix(mass_matrix)
+        , laplace_matrix(laplace_matrix)
+      {}
+
+      void
+      vmult(BlockVector<double> &dst, const BlockVector<double> &src) const
+      {
+        Assert(false, ExcNotImplemented()); // TODO
+        (void)dst;
+        (void)src;
+      }
+
+    private:
+      const SparseMatrix<double> &mass_matrix;
+      const SparseMatrix<double> &laplace_matrix;
+    };
+
+    class Preconditioner
+    {
+    public:
+      Preconditioner()
+      {}
+
+      void
+      vmult(BlockVector<double> &dst, const BlockVector<double> &src) const
+      {
+        dst = src; // TODO: for the first try we use the identity matrix
+                   // as preconditioner
+      }
+
+    private:
     };
 
     const double theta;
@@ -384,8 +504,15 @@ namespace Step26
                                           constraints);
     };
 
-    auto time_integration_scheme =
-      std::make_unique<TimeIntegrationScheme<dim>>(mass_matrix,
+    std::unique_ptr<TimeIntegrationScheme> time_integration_scheme;
+
+    if (true /*use one-step-theta method*/)
+      time_integration_scheme =
+        std::make_unique<TimeIntegrationSchemeOneStepTheta>(
+          mass_matrix, laplace_matrix, evaluate_rhs_function);
+    else /*use IRK method*/
+      time_integration_scheme =
+        std::make_unique<TimeIntegrationSchemeIRK>(mass_matrix,
                                                    laplace_matrix,
                                                    evaluate_rhs_function);
 
