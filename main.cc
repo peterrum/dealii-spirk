@@ -291,75 +291,102 @@ namespace TimeIntegrationSchemes
 
 namespace HeatEquation
 {
+  struct Parameters
+  {
+    unsigned int fe_degree     = 1;
+    unsigned int n_refinements = 4;
+
+    std::string time_integration_scheme = "ost";
+    double      end_time                = 0.5;
+    double      time_step_size          = 1.0 / 500;
+
+    void
+    parse(const std::string file_name)
+    {
+      dealii::ParameterHandler prm;
+      prm.add_parameter("FEDegree", fe_degree);
+      prm.add_parameter("NRefinements", n_refinements);
+      prm.add_parameter("TimeIntegrationScheme",
+                        time_integration_scheme,
+                        "",
+                        Patterns::Selection("ost|irk"));
+      prm.add_parameter("EndTime", end_time);
+      prm.add_parameter("TimeStepSize", time_step_size);
+
+      std::ifstream file;
+      file.open(file_name);
+      prm.parse_input_from_json(file, true);
+    }
+  };
+
+
+
   template <int dim>
   class Problem
   {
   public:
-    Problem()
-      : fe(1 /*linear element*/)
+    Problem(const Parameters &params)
+      : params(params)
+      , fe(params.fe_degree)
+      , quadrature(params.fe_degree + 1)
       , dof_handler(triangulation)
-      , time_step(1. / 500 /*TODO: make time-step size a parameter*/)
     {}
 
     void
     run()
     {
-      const unsigned int n_refinements = 4; // TODO: make number of refinements
-      // a parameter
-
+      // TODO: adjust type of geometry
       GridGenerator::hyper_L(triangulation);
-      triangulation.refine_global(n_refinements);
+      triangulation.refine_global(params.n_refinements);
 
       setup_system();
 
-      time            = 0.0;
-      timestep_number = 0;
+      double       time            = 0.0;
+      unsigned int timestep_number = 0;
 
-      // TODO: initial condition might need to be ajdusted
+      // TODO: initial condition might need to be adjusted
       VectorTools::interpolate(dof_handler,
                                Functions::ZeroFunction<dim>(),
                                solution);
 
-      output_results();
+      output_results(time, timestep_number);
 
       const auto evaluate_rhs_function = [&](const double    time,
                                              Vector<double> &tmp) -> void {
         RightHandSide rhs_function;
         rhs_function.set_time(time);
-        VectorTools::create_right_hand_side(dof_handler,
-                                            QGauss<dim>(
-                                              dof_handler.get_fe().degree + 1),
-                                            rhs_function,
-                                            tmp,
-                                            constraints);
+        VectorTools::create_right_hand_side(
+          dof_handler, quadrature, rhs_function, tmp, constraints);
       };
 
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
 
-      if (true /*use one-step-theta method*/)
+      if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
             mass_matrix, laplace_matrix, evaluate_rhs_function);
-      else /*use IRK method*/
+      else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(mass_matrix,
                                                         laplace_matrix,
                                                         evaluate_rhs_function);
+      else
+        Assert(false, ExcNotImplemented());
 
-      while (time <= 0.5 /*TODO: make end time a parameter*/)
+      while (time <= params.end_time)
         {
-          time += time_step;
+          time += params.time_step_size;
           ++timestep_number;
 
           time_integration_scheme->solve(solution,
                                          timestep_number,
                                          time,
-                                         time_step);
+                                         params.time_step_size);
 
           constraints.distribute(solution);
 
-          output_results();
+          output_results(time, timestep_number);
         }
     }
 
@@ -391,24 +418,17 @@ namespace HeatEquation
       mass_matrix.reinit(sparsity_pattern);
       laplace_matrix.reinit(sparsity_pattern);
 
-      MatrixCreator::create_mass_matrix<dim, dim, double>(dof_handler,
-                                                          QGauss<dim>(
-                                                            fe.degree + 1),
-                                                          mass_matrix,
-                                                          nullptr,
-                                                          constraints);
-      MatrixCreator::create_laplace_matrix<dim, dim>(dof_handler,
-                                                     QGauss<dim>(fe.degree + 1),
-                                                     laplace_matrix,
-                                                     nullptr,
-                                                     constraints);
+      MatrixCreator::create_mass_matrix<dim, dim, double>(
+        dof_handler, quadrature, mass_matrix, nullptr, constraints);
+      MatrixCreator::create_laplace_matrix<dim, dim>(
+        dof_handler, quadrature, laplace_matrix, nullptr, constraints);
 
       solution.reinit(dof_handler.n_dofs());
       system_rhs.reinit(dof_handler.n_dofs());
     }
 
     void
-    output_results() const
+    output_results(const double time, const unsigned int timestep_number) const
     {
       DataOut<dim> data_out;
 
@@ -425,8 +445,11 @@ namespace HeatEquation
       data_out.write_vtk(output);
     }
 
+    const Parameters &params;
+
     Triangulation<dim> triangulation;
     FE_Q<dim>          fe;
+    QGauss<dim>        quadrature;
     DoFHandler<dim>    dof_handler;
 
     AffineConstraints<double> constraints;
@@ -437,10 +460,6 @@ namespace HeatEquation
 
     Vector<double> solution;
     Vector<double> system_rhs;
-
-    double       time;
-    double       time_step;
-    unsigned int timestep_number;
 
     class RightHandSide : public Function<dim>
     {
@@ -491,11 +510,16 @@ namespace HeatEquation
 
 
 int
-main()
+main(int argc, char **argv)
 {
   try
     {
-      HeatEquation::Problem<2> heat_equation_solver;
+      HeatEquation::Parameters params;
+
+      if (argc == 2)
+        params.parse(std::string(argv[1]));
+
+      HeatEquation::Problem<2> heat_equation_solver(params);
       heat_equation_solver.run();
     }
   catch (std::exception &exc)
