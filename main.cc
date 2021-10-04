@@ -457,8 +457,7 @@ namespace HeatEquation
     void
     run()
     {
-      // TODO: adjust type of geometry
-      GridGenerator::hyper_L(triangulation);
+      GridGenerator::hyper_cube(triangulation);
       triangulation.refine_global(params.n_refinements);
 
       setup_system();
@@ -467,9 +466,7 @@ namespace HeatEquation
       unsigned int timestep_number = 0;
 
       // TODO: initial condition might need to be adjusted
-      VectorTools::interpolate(dof_handler,
-                               Functions::ZeroFunction<dim>(),
-                               solution);
+      VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
 
       output_results(time, timestep_number);
 
@@ -602,6 +599,24 @@ namespace HeatEquation
                                           triangulation.get_communicator(),
                                           3,
                                           1);
+
+      {
+        solution.update_ghost_values();
+        Vector<float> norm_per_cell(triangulation.n_active_cells());
+        VectorTools::integrate_difference(dof_handler,
+                                          solution,
+                                          AnalyticalSolution(),
+                                          norm_per_cell,
+                                          QGauss<dim>(fe.degree + 2),
+                                          VectorTools::L2_norm);
+        const double error_norm =
+          VectorTools::compute_global_error(triangulation,
+                                            norm_per_cell,
+                                            VectorTools::L2_norm);
+        pcout << "   Error in the L2 norm           :     " << error_norm
+              << std::endl;
+        solution.zero_out_ghost_values();
+      }
     }
 
     const Parameters &params;
@@ -627,43 +642,69 @@ namespace HeatEquation
     public:
       RightHandSide()
         : Function<dim>()
-        , period(0.2)
+        , a_x(2.0)
+        , a_y(2.0)
+        , a_t(0.5)
       {}
 
       virtual double
       value(const Point<dim> & p,
             const unsigned int component = 0) const override
       {
-        // TODO: adjust right-hand-side function
-
         (void)component;
-        AssertIndexRange(component, 1);
-        Assert(dim == 2, ExcNotImplemented());
 
-        const double time = this->get_time();
-        const double point_within_period =
-          (time / period - std::floor(time / period));
+        AssertDimension(dim, 2);
 
-        if ((point_within_period >= 0.0) && (point_within_period <= 0.2))
-          {
-            if ((p[0] > 0.5) && (p[1] > -0.5))
-              return 1;
-            else
-              return 0;
-          }
-        else if ((point_within_period >= 0.5) && (point_within_period <= 0.7))
-          {
-            if ((p[0] > -0.5) && (p[1] > 0.5))
-              return 1;
-            else
-              return 0;
-          }
-        else
-          return 0;
+        const double x = p[0];
+        const double y = p[1];
+        const double t = this->get_time();
+
+        return std::sin(a_x * numbers::PI * x) *
+               std::sin(a_y * numbers::PI * y) *
+               (numbers::PI * std::cos(numbers::PI * t) -
+                a_t * (std::sin(numbers::PI * t) + 1) +
+                (a_x * a_x + a_y * a_y) * numbers::PI * numbers::PI *
+                  (std::sin(numbers::PI * t) + 1)) *
+               std::exp(-a_t * t);
       }
 
     private:
-      const double period;
+      const double a_x;
+      const double a_y;
+      const double a_t;
+    };
+
+    class AnalyticalSolution : public Function<dim>
+    {
+    public:
+      AnalyticalSolution()
+        : Function<dim>()
+        , a_x(2.0)
+        , a_y(2.0)
+        , a_t(0.5)
+      {}
+
+      virtual double
+      value(const Point<dim> & p,
+            const unsigned int component = 0) const override
+      {
+        (void)component;
+
+        AssertDimension(dim, 2);
+
+        const double x = p[0];
+        const double y = p[1];
+        const double t = this->get_time();
+
+        return std::sin(a_x * numbers::PI * x) *
+               std::sin(a_y * numbers::PI * y) *
+               (1 + std::sin(numbers::PI * t)) * std::exp(-a_t * t);
+      }
+
+    private:
+      const double a_x;
+      const double a_y;
+      const double a_t;
     };
   };
 } // namespace HeatEquation
