@@ -311,7 +311,10 @@ namespace TimeIntegrationSchemes
         const SparseMatrixType &laplace_matrix,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : mass_matrix(mass_matrix)
+      : q(0)
+      , A_inv(0, 0)
+      , c_vec(0)
+      , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
@@ -323,25 +326,55 @@ namespace TimeIntegrationSchemes
           const double       time,
           const double       time_step) const override
     {
+      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
+
+      this->time_step = time_step;
+
       // TODO: create right-hand-side vector
-      BlockVectorType system_rhs;
+      BlockVectorType system_rhs(q);
+      BlockVectorType system_solution(q);
+      VectorType      tmp;
 
-      Assert(false, ExcNotImplemented());
-      (void)timestep_number;
-      (void)time;
-      (void)time_step;
+      for (unsigned int i = 0; i < q; ++i)
+        {
+          system_rhs.block(i).reinit(solution);
+          system_solution.block(i).reinit(solution);
+        }
+      tmp.reinit(solution);
 
-      // TODO: create an initial guess
-      BlockVectorType system_solution;
+      for (unsigned int i = 0; i < q; ++i)
+        {
+          evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step, tmp);
+          mass_matrix.vmult(system_rhs.block(i), tmp);
+        }
 
-      Assert(false, ExcNotImplemented());
+      laplace_matrix.vmult(tmp, solution);
+
+      {
+        std::vector<typename VectorType::value_type> values(q);
+
+        for (const auto e : solution.locally_owned_elements())
+          {
+            for (unsigned int j = 0; j < q; ++j)
+              values[q] = system_rhs.block(j)[e];
+
+            for (unsigned int i = 0; i < q; ++i)
+              for (unsigned int j = 0; j < q; ++j)
+                {
+                  if (i == 0)
+                    system_rhs.block(i)[e] = tmp[e];
+
+                  system_rhs.block(i)[e] += A_inv[i][j] * values[j];
+                }
+          }
+      }
 
       // solve system
       SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
       SolverCG<BlockVectorType> cg(solver_control);
 
       // ... create operator
-      SystemMatrix sm(mass_matrix, laplace_matrix);
+      SystemMatrix sm(q, A_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... create preconditioner
       Preconditioner preconditioner;
@@ -353,31 +386,55 @@ namespace TimeIntegrationSchemes
             << std::endl;
 
       // TODO: accumulate result in solution
-      (void)system_solution;
-      (void)solution;
+      for (unsigned int i = 0; i < q; ++i)
+        solution.add(time_step * b_vec[i], system_solution.block(i));
     }
 
   private:
     class SystemMatrix
     {
     public:
-      SystemMatrix(const SparseMatrixType &mass_matrix,
+      SystemMatrix(const unsigned int                                q,
+                   const FullMatrix<typename VectorType::value_type> A_inv,
+                   const double                                      time_step,
+                   const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
-        : mass_matrix(mass_matrix)
+        : q(q)
+        , A_inv(A_inv)
+        , time_step(time_step)
+        , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
       {}
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        Assert(false, ExcNotImplemented()); // TODO
-        (void)dst;
-        (void)src;
+        VectorType tmp;
+        tmp.reinit(src.block(0));
+
+        dst = 0;
+        for (unsigned int i = 0; i < q; ++i)
+          {
+            for (unsigned int j = 0; j < q; ++j)
+              {
+                mass_matrix.vmult(tmp, src.block(j));
+                dst.block(i).add(A_inv(i, j), tmp);
+
+                if (i == j)
+                  {
+                    laplace_matrix.vmult(tmp, src.block(j));
+                    dst.block(i).add(-time_step, tmp);
+                  }
+              }
+          }
       }
 
     private:
-      const SparseMatrixType &mass_matrix;
-      const SparseMatrixType &laplace_matrix;
+      const unsigned int                                q;
+      const FullMatrix<typename VectorType::value_type> A_inv;
+      const double                                      time_step;
+      const SparseMatrixType &                          mass_matrix;
+      const SparseMatrixType &                          laplace_matrix;
     };
 
     class Preconditioner
@@ -398,12 +455,19 @@ namespace TimeIntegrationSchemes
     private:
     };
 
+    const unsigned int                                q;
+    const FullMatrix<typename VectorType::value_type> A_inv;
+    const Vector<typename VectorType::value_type>     b_vec;
+    const Vector<typename VectorType::value_type>     c_vec;
+
     const SparseMatrixType &mass_matrix;
     const SparseMatrixType &laplace_matrix;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
     ConditionalOStream pcout;
+
+    mutable double time_step = 0.0;
   };
 } // namespace TimeIntegrationSchemes
 
