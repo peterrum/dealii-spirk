@@ -420,8 +420,8 @@ namespace TimeIntegrationSchemes
       AssertDimension(m, n_stages);
       AssertDimension(n, n_stages);
 
-      for (unsigned int i = 0; i < n_stages; i++)
-        for (unsigned j = 0; j < n_stages; j++)
+      for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned j = 0; j < n_stages; ++j)
           fin >> result[i][j];
 
       return result;
@@ -440,7 +440,7 @@ namespace TimeIntegrationSchemes
       AssertDimension(m, 1);
       AssertDimension(n, n_stages);
 
-      for (unsigned int i = 0; i < n_stages; i++)
+      for (unsigned int i = 0; i < n_stages; ++i)
         fin >> result[i];
 
       return result;
