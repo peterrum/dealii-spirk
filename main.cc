@@ -335,6 +335,9 @@ namespace TimeIntegrationSchemes
     {
       pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
 
+      AssertThrow((this->time_step == 0 || this->time_step == time_step),
+                  ExcNotImplemented());
+
       this->time_step = time_step;
 
       BlockVectorType system_rhs(n_stages);      // TODO
@@ -375,20 +378,25 @@ namespace TimeIntegrationSchemes
       }
 
       // solve system
-      SolverControl                 solver_control(n_max_iterations,
+      SolverControl solver_control(n_max_iterations,
                                    rel_tolerance *
                                      system_rhs.l2_norm() /*TODO*/);
+
       SolverFGMRES<BlockVectorType> cg(solver_control);
 
-      // ... create operator
-      SystemMatrix sm(A_inv, time_step, mass_matrix, laplace_matrix);
-
-      // ... create preconditioner
-      Preconditioner preconditioner(
-        d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+      // ... create operator and preconditioner
+      if (system_matrix == nullptr)
+        {
+          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
+                                                               time_step,
+                                                               mass_matrix,
+                                                               laplace_matrix);
+          this->preconditioner = std::make_unique<Preconditioner>(
+            d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+        }
 
       // ... solve
-      cg.solve(sm, system_solution, system_rhs, preconditioner);
+      cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
 
       pcout << "     " << solver_control.last_step() << " CG iterations."
             << std::endl;
@@ -583,6 +591,9 @@ namespace TimeIntegrationSchemes
     ConditionalOStream pcout;
 
     mutable double time_step = 0.0;
+
+    mutable std::unique_ptr<SystemMatrix>   system_matrix;
+    mutable std::unique_ptr<Preconditioner> preconditioner;
   };
 } // namespace TimeIntegrationSchemes
 
