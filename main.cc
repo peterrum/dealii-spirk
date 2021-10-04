@@ -318,7 +318,7 @@ namespace TimeIntegrationSchemes
       , T_inv(load_matrix_from_file(n_stages, "T_inv"))
       , b_vec(load_vector_from_file(n_stages, "b_vec_"))
       , c_vec(load_vector_from_file(n_stages, "c_vec_"))
-      , D_vec(load_vector_from_file(n_stages, "D_vec_"))
+      , d_vec(load_vector_from_file(n_stages, "D_vec_"))
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
@@ -374,15 +374,15 @@ namespace TimeIntegrationSchemes
       }
 
       // solve system
-      SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
+      SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm() /*TODO*/);
       SolverFGMRES<BlockVectorType> cg(solver_control);
 
       // ... create operator
-      SystemMatrix sm(n_stages, A_inv, time_step, mass_matrix, laplace_matrix);
+      SystemMatrix sm(A_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... create preconditioner
       Preconditioner preconditioner(
-        n_stages, D_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+        d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... solve
       cg.solve(sm, system_solution, system_rhs, preconditioner);
@@ -439,12 +439,11 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const unsigned int                                 n_stages,
-                   const FullMatrix<typename VectorType::value_type> &A_inv,
+      SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
-        : n_stages(n_stages)
+        : n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
@@ -483,15 +482,14 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(const unsigned int                             n_stages,
-                     const Vector<typename VectorType::value_type> &D_vec,
+      Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
                      const double            time_step,
                      const SparseMatrixType &mass_matrix,
                      const SparseMatrixType &laplace_matrix)
-        : n_stages(n_stages)
-        , D_vec(D_vec)
+        : n_stages(d_vec.size())
+        , d_vec(d_vec)
         , T_mat(T)
         , T_mat_inv(T_inv)
         , tau(time_step)
@@ -505,7 +503,7 @@ namespace TimeIntegrationSchemes
           {
             AMGblocks[i].copy_from(laplace_matrix);
             AMGblocks[i] *= -tau;
-            AMGblocks[i].add(D_vec[i], mass_matrix);
+            AMGblocks[i].add(d_vec[i], mass_matrix);
 
             TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
             AMG_list[i].initialize(AMGblocks[i], amg_data);
@@ -545,7 +543,7 @@ namespace TimeIntegrationSchemes
 
     private:
       const unsigned int                                 n_stages;
-      const Vector<typename VectorType::value_type> &    D_vec;
+      const Vector<typename VectorType::value_type> &    d_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
       const FullMatrix<typename VectorType::value_type> &T_mat_inv;
 
@@ -564,7 +562,7 @@ namespace TimeIntegrationSchemes
     const FullMatrix<typename VectorType::value_type> T_inv;
     const Vector<typename VectorType::value_type>     b_vec;
     const Vector<typename VectorType::value_type>     c_vec;
-    const Vector<typename VectorType::value_type>     D_vec;
+    const Vector<typename VectorType::value_type>     d_vec;
 
     const SparseMatrixType &mass_matrix;
     const SparseMatrixType &laplace_matrix;
