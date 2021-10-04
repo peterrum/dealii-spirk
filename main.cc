@@ -313,6 +313,8 @@ namespace TimeIntegrationSchemes
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
       : n_stages(3)
+      , n_max_iterations(1000)
+      , rel_tolerance(1e-8)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
       , T(load_matrix_from_file(n_stages, "T"))
       , T_inv(load_matrix_from_file(n_stages, "T_inv"))
@@ -335,10 +337,9 @@ namespace TimeIntegrationSchemes
 
       this->time_step = time_step;
 
-      // TODO: create right-hand-side vector
-      BlockVectorType system_rhs(n_stages);
-      BlockVectorType system_solution(n_stages);
-      VectorType      tmp;
+      BlockVectorType system_rhs(n_stages);      // TODO
+      BlockVectorType system_solution(n_stages); //
+      VectorType      tmp;                       //
 
       for (unsigned int i = 0; i < n_stages; ++i)
         {
@@ -374,7 +375,9 @@ namespace TimeIntegrationSchemes
       }
 
       // solve system
-      SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm() /*TODO*/);
+      SolverControl                 solver_control(n_max_iterations,
+                                   rel_tolerance *
+                                     system_rhs.l2_norm() /*TODO*/);
       SolverFGMRES<BlockVectorType> cg(solver_control);
 
       // ... create operator
@@ -488,7 +491,10 @@ namespace TimeIntegrationSchemes
                      const double            time_step,
                      const SparseMatrixType &mass_matrix,
                      const SparseMatrixType &laplace_matrix)
-        : n_stages(d_vec.size())
+        : n_max_iterations(100)
+        , abs_tolerance(1e-6)
+        , cut_off_tolerance(1e-12)
+        , n_stages(d_vec.size())
         , d_vec(d_vec)
         , T_mat(T)
         , T_mat_inv(T_inv)
@@ -496,52 +502,55 @@ namespace TimeIntegrationSchemes
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
       {
-        AMGblocks.resize(n_stages);
-        AMG_list.resize(n_stages);
+        operators.resize(n_stages);
+        preconditioners.resize(n_stages);
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            AMGblocks[i].copy_from(laplace_matrix);
-            AMGblocks[i] *= -tau;
-            AMGblocks[i].add(d_vec[i], mass_matrix);
+            operators[i].copy_from(laplace_matrix);
+            operators[i] *= -tau;
+            operators[i].add(d_vec[i], mass_matrix);
 
             TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-            AMG_list[i].initialize(AMGblocks[i], amg_data);
+            preconditioners[i].initialize(operators[i], amg_data);
           }
       }
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        BlockVectorType temp_vec_block; // TODO
-        temp_vec_block.reinit(src);     //
+        BlockVectorType tmp_vectors; // TODO
+        tmp_vectors.reinit(src);     //
 
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
-            if (true || abs(T_mat_inv(i, j)) > 1e-12 /*TODO*/)
+            if (true || abs(T_mat_inv(i, j)) > cut_off_tolerance)
               dst.block(i).add(T_mat_inv(i, j), src.block(j));
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            SolverControl solver_control;
-            solver_control.set_tolerance(1e-6);
+            SolverControl solver_control(n_max_iterations, abs_tolerance);
             SolverFGMRES<VectorType> solver(solver_control);
 
-            solver.solve(AMGblocks[i],
-                         temp_vec_block.block(i),
+            solver.solve(operators[i],
+                         tmp_vectors.block(i),
                          dst.block(i),
-                         AMG_list[i]);
+                         preconditioners[i]);
           }
 
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
-            if (true || abs(T_mat(i, j)) > 1e-12 /*TODO*/)
-              dst.block(i).add(T_mat(i, j), temp_vec_block.block(j));
+            if (true || abs(T_mat(i, j)) > cut_off_tolerance)
+              dst.block(i).add(T_mat(i, j), tmp_vectors.block(j));
       }
 
     private:
+      const unsigned int n_max_iterations;
+      const double       abs_tolerance;
+      const double       cut_off_tolerance;
+
       const unsigned int                                 n_stages;
       const Vector<typename VectorType::value_type> &    d_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
@@ -552,11 +561,13 @@ namespace TimeIntegrationSchemes
       const SparseMatrixType &mass_matrix;
       const SparseMatrixType &laplace_matrix;
 
-      std::vector<SparseMatrixType>                  AMGblocks;
-      std::vector<TrilinosWrappers::PreconditionAMG> AMG_list;
+      std::vector<SparseMatrixType>                  operators;
+      std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
     };
 
     const unsigned int                                n_stages;
+    const unsigned int                                n_max_iterations;
+    const double                                      rel_tolerance;
     const FullMatrix<typename VectorType::value_type> A_inv;
     const FullMatrix<typename VectorType::value_type> T;
     const FullMatrix<typename VectorType::value_type> T_inv;
@@ -633,7 +644,6 @@ namespace HeatEquation
       double       time            = 0.0;
       unsigned int timestep_number = 0;
 
-      // TODO: initial condition might need to be adjusted
       VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
 
       output_results(time, timestep_number);
