@@ -311,9 +311,10 @@ namespace TimeIntegrationSchemes
         const SparseMatrixType &laplace_matrix,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : q(0)
-      , A_inv(0, 0)
-      , c_vec(0)
+      : q(3)
+      , A_inv(load_matrix_from_file(q, "A"))
+      , b_vec(load_vector_from_file(q, "b_vec_"))
+      , c_vec(load_vector_from_file(q, "c_vec_"))
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
@@ -356,7 +357,7 @@ namespace TimeIntegrationSchemes
         for (const auto e : solution.locally_owned_elements())
           {
             for (unsigned int j = 0; j < q; ++j)
-              values[q] = system_rhs.block(j)[e];
+              values[j] = system_rhs.block(j)[e];
 
             for (unsigned int i = 0; i < q; ++i)
               for (unsigned int j = 0; j < q; ++j)
@@ -385,12 +386,52 @@ namespace TimeIntegrationSchemes
       pcout << "     " << solver_control.last_step() << " CG iterations."
             << std::endl;
 
-      // TODO: accumulate result in solution
+      // accumulate result in solution
       for (unsigned int i = 0; i < q; ++i)
         solution.add(time_step * b_vec[i], system_solution.block(i));
     }
 
   private:
+    static FullMatrix<typename VectorType::value_type>
+    load_matrix_from_file(const unsigned int q, const std::string label)
+    {
+      FullMatrix<typename VectorType::value_type> result(q, q);
+
+      std::ifstream fin(label + std::to_string(q) + ".txt");
+
+      unsigned int m, n;
+      fin >> m >> n;
+
+      AssertDimension(m, q);
+      AssertDimension(n, q);
+
+      for (unsigned int i = 0; i < q; i++)
+        for (unsigned j = 0; j < q; j++)
+          fin >> result[i][j];
+
+      return result;
+    }
+
+    static Vector<typename VectorType::value_type>
+    load_vector_from_file(const unsigned int q, const std::string label)
+    {
+      Vector<typename VectorType::value_type> result(q);
+
+      std::ifstream fin(label + std::to_string(q) + ".txt");
+
+      unsigned int m, n;
+      fin >> m >> n;
+
+      AssertDimension(m, 1);
+      AssertDimension(n, q);
+
+      for (unsigned int i = 0; i < q; i++)
+        fin >> result[i];
+
+      return result;
+    }
+
+
     class SystemMatrix
     {
     public:
