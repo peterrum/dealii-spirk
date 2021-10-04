@@ -500,24 +500,25 @@ namespace TimeIntegrationSchemes
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
       {
+        AMGblocks.resize(q);
         AMG_list.resize(q);
 
         for (unsigned int i = 0; i < q; ++i)
           {
-            AMGblock.copy_from(laplace_matrix);
-            AMGblock *= -tau;
-            AMGblock.add(D_vec[i], mass_matrix);
+            AMGblocks[i].copy_from(laplace_matrix);
+            AMGblocks[i] *= -tau;
+            AMGblocks[i].add(D_vec[i], mass_matrix);
 
             TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-            AMG_list[i].initialize(AMGblock, amg_data);
+            AMG_list[i].initialize(AMGblocks[i], amg_data);
           }
       }
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        BlockVectorType temp_vec_block;
-        temp_vec_block.reinit(src);
+        BlockVectorType temp_vec_block; // TODO
+        temp_vec_block.reinit(src);     //
 
         dst = 0;
         for (unsigned int i = 0; i < q; ++i)
@@ -527,16 +528,11 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < q; ++i)
           {
-            AMGblock.copy_from(laplace_matrix);
-            AMGblock *= -tau;
-            AMGblock.add(D_vec[i], mass_matrix);
-
-            // solve
             SolverControl solver_control;
             solver_control.set_tolerance(1e-6);
             SolverFGMRES<VectorType> solver(solver_control);
 
-            solver.solve(AMGblock,
+            solver.solve(AMGblocks[i],
                          temp_vec_block.block(i),
                          dst.block(i),
                          AMG_list[i]);
@@ -560,8 +556,7 @@ namespace TimeIntegrationSchemes
       const SparseMatrixType &mass_matrix;
       const SparseMatrixType &laplace_matrix;
 
-      mutable SparseMatrixType AMGblock;
-
+      std::vector<SparseMatrixType>                  AMGblocks;
       std::vector<TrilinosWrappers::PreconditionAMG> AMG_list;
     };
 
