@@ -312,13 +312,13 @@ namespace TimeIntegrationSchemes
         const SparseMatrixType &laplace_matrix,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : q(3)
-      , A_inv(load_matrix_from_file(q, "A_inv"))
-      , T(load_matrix_from_file(q, "T"))
-      , T_inv(load_matrix_from_file(q, "T_inv"))
-      , b_vec(load_vector_from_file(q, "b_vec_"))
-      , c_vec(load_vector_from_file(q, "c_vec_"))
-      , D_vec(load_vector_from_file(q, "D_vec_"))
+      : n_stages(3)
+      , A_inv(load_matrix_from_file(n_stages, "A_inv"))
+      , T(load_matrix_from_file(n_stages, "T"))
+      , T_inv(load_matrix_from_file(n_stages, "T_inv"))
+      , b_vec(load_vector_from_file(n_stages, "b_vec_"))
+      , c_vec(load_vector_from_file(n_stages, "c_vec_"))
+      , D_vec(load_vector_from_file(n_stages, "D_vec_"))
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
@@ -336,38 +336,38 @@ namespace TimeIntegrationSchemes
       this->time_step = time_step;
 
       // TODO: create right-hand-side vector
-      BlockVectorType system_rhs(q);
-      BlockVectorType system_solution(q);
+      BlockVectorType system_rhs(n_stages);
+      BlockVectorType system_solution(n_stages);
       VectorType      tmp;
 
-      for (unsigned int i = 0; i < q; ++i)
+      for (unsigned int i = 0; i < n_stages; ++i)
         {
           system_rhs.block(i).reinit(solution);
           system_solution.block(i).reinit(solution);
         }
       tmp.reinit(solution);
 
-      for (unsigned int i = 0; i < q; ++i)
+      for (unsigned int i = 0; i < n_stages; ++i)
         evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
                               system_rhs.block(i));
 
       laplace_matrix.vmult(tmp, solution);
 
-      for (unsigned int i = 0; i < q; ++i)
+      for (unsigned int i = 0; i < n_stages; ++i)
         system_rhs.block(i).add(1.0, tmp);
 
       {
-        std::vector<typename VectorType::value_type> values(q);
+        std::vector<typename VectorType::value_type> values(n_stages);
 
         for (const auto e : solution.locally_owned_elements())
           {
-            for (unsigned int j = 0; j < q; ++j)
+            for (unsigned int j = 0; j < n_stages; ++j)
               values[j] = system_rhs.block(j)[e];
 
-            for (unsigned int i = 0; i < q; ++i)
+            for (unsigned int i = 0; i < n_stages; ++i)
               {
                 system_rhs.block(i)[e] = 0.0;
-                for (unsigned int j = 0; j < q; ++j)
+                for (unsigned int j = 0; j < n_stages; ++j)
                   system_rhs.block(i)[e] += A_inv[i][j] * values[j];
               }
           }
@@ -378,11 +378,11 @@ namespace TimeIntegrationSchemes
       SolverFGMRES<BlockVectorType> cg(solver_control);
 
       // ... create operator
-      SystemMatrix sm(q, A_inv, time_step, mass_matrix, laplace_matrix);
+      SystemMatrix sm(n_stages, A_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... create preconditioner
       Preconditioner preconditioner(
-        q, D_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+        n_stages, D_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... solve
       cg.solve(sm, system_solution, system_rhs, preconditioner);
@@ -391,45 +391,45 @@ namespace TimeIntegrationSchemes
             << std::endl;
 
       // accumulate result in solution
-      for (unsigned int i = 0; i < q; ++i)
+      for (unsigned int i = 0; i < n_stages; ++i)
         solution.add(time_step * b_vec[i], system_solution.block(i));
     }
 
   private:
     static FullMatrix<typename VectorType::value_type>
-    load_matrix_from_file(const unsigned int q, const std::string label)
+    load_matrix_from_file(const unsigned int n_stages, const std::string label)
     {
-      FullMatrix<typename VectorType::value_type> result(q, q);
+      FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
 
-      std::ifstream fin(label + std::to_string(q) + ".txt");
+      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
 
       unsigned int m, n;
       fin >> m >> n;
 
-      AssertDimension(m, q);
-      AssertDimension(n, q);
+      AssertDimension(m, n_stages);
+      AssertDimension(n, n_stages);
 
-      for (unsigned int i = 0; i < q; i++)
-        for (unsigned j = 0; j < q; j++)
+      for (unsigned int i = 0; i < n_stages; i++)
+        for (unsigned j = 0; j < n_stages; j++)
           fin >> result[i][j];
 
       return result;
     }
 
     static Vector<typename VectorType::value_type>
-    load_vector_from_file(const unsigned int q, const std::string label)
+    load_vector_from_file(const unsigned int n_stages, const std::string label)
     {
-      Vector<typename VectorType::value_type> result(q);
+      Vector<typename VectorType::value_type> result(n_stages);
 
-      std::ifstream fin(label + std::to_string(q) + ".txt");
+      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
 
       unsigned int m, n;
       fin >> m >> n;
 
       AssertDimension(m, 1);
-      AssertDimension(n, q);
+      AssertDimension(n, n_stages);
 
-      for (unsigned int i = 0; i < q; i++)
+      for (unsigned int i = 0; i < n_stages; i++)
         fin >> result[i];
 
       return result;
@@ -439,12 +439,12 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const unsigned int                                 q,
+      SystemMatrix(const unsigned int                                 n_stages,
                    const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
-        : q(q)
+        : n_stages(n_stages)
         , A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
@@ -458,24 +458,22 @@ namespace TimeIntegrationSchemes
         tmp.reinit(src.block(0));
 
         dst = 0;
-        for (unsigned int i = 0; i < q; ++i)
-          {
-            for (unsigned int j = 0; j < q; ++j)
-              {
-                mass_matrix.vmult(tmp, src.block(j));
-                dst.block(i).add(A_inv(i, j), tmp);
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
+            {
+              mass_matrix.vmult(tmp, src.block(j));
+              dst.block(i).add(A_inv(i, j), tmp);
 
-                if (i == j)
-                  {
-                    laplace_matrix.vmult(tmp, src.block(j));
-                    dst.block(i).add(-time_step, tmp);
-                  }
-              }
-          }
+              if (i == j)
+                {
+                  laplace_matrix.vmult(tmp, src.block(j));
+                  dst.block(i).add(-time_step, tmp);
+                }
+            }
       }
 
     private:
-      const unsigned int                                 q;
+      const unsigned int                                 n_stages;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const SparseMatrixType &                           mass_matrix;
@@ -485,14 +483,14 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(const unsigned int                                 q,
-                     const Vector<typename VectorType::value_type> &    D_vec,
+      Preconditioner(const unsigned int                             n_stages,
+                     const Vector<typename VectorType::value_type> &D_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
                      const double            time_step,
                      const SparseMatrixType &mass_matrix,
                      const SparseMatrixType &laplace_matrix)
-        : q(q)
+        : n_stages(n_stages)
         , D_vec(D_vec)
         , T_mat(T)
         , T_mat_inv(T_inv)
@@ -500,10 +498,10 @@ namespace TimeIntegrationSchemes
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
       {
-        AMGblocks.resize(q);
-        AMG_list.resize(q);
+        AMGblocks.resize(n_stages);
+        AMG_list.resize(n_stages);
 
-        for (unsigned int i = 0; i < q; ++i)
+        for (unsigned int i = 0; i < n_stages; ++i)
           {
             AMGblocks[i].copy_from(laplace_matrix);
             AMGblocks[i] *= -tau;
@@ -521,12 +519,12 @@ namespace TimeIntegrationSchemes
         temp_vec_block.reinit(src);     //
 
         dst = 0;
-        for (unsigned int i = 0; i < q; ++i)
-          for (unsigned int j = 0; j < q; ++j)
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
             if (true || abs(T_mat_inv(i, j)) > 1e-12 /*TODO*/)
               dst.block(i).add(T_mat_inv(i, j), src.block(j));
 
-        for (unsigned int i = 0; i < q; ++i)
+        for (unsigned int i = 0; i < n_stages; ++i)
           {
             SolverControl solver_control;
             solver_control.set_tolerance(1e-6);
@@ -539,14 +537,14 @@ namespace TimeIntegrationSchemes
           }
 
         dst = 0;
-        for (unsigned int i = 0; i < q; ++i)
-          for (unsigned int j = 0; j < q; ++j)
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
             if (true || abs(T_mat(i, j)) > 1e-12 /*TODO*/)
               dst.block(i).add(T_mat(i, j), temp_vec_block.block(j));
       }
 
     private:
-      const unsigned int                                 q;
+      const unsigned int                                 n_stages;
       const Vector<typename VectorType::value_type> &    D_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
       const FullMatrix<typename VectorType::value_type> &T_mat_inv;
@@ -560,7 +558,7 @@ namespace TimeIntegrationSchemes
       std::vector<TrilinosWrappers::PreconditionAMG> AMG_list;
     };
 
-    const unsigned int                                q;
+    const unsigned int                                n_stages;
     const FullMatrix<typename VectorType::value_type> A_inv;
     const FullMatrix<typename VectorType::value_type> T;
     const FullMatrix<typename VectorType::value_type> T_inv;
