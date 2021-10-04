@@ -525,7 +525,7 @@ namespace TimeIntegrationSchemes
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
-            if (true || abs(T_mat_inv(i, j)) > cut_off_tolerance)
+            if (std::abs(T_mat_inv(i, j)) > cut_off_tolerance)
               dst.block(i).add(T_mat_inv(i, j), src.block(j));
 
         for (unsigned int i = 0; i < n_stages; ++i)
@@ -542,7 +542,7 @@ namespace TimeIntegrationSchemes
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
-            if (true || abs(T_mat(i, j)) > cut_off_tolerance)
+            if (std::abs(T_mat(i, j)) > cut_off_tolerance)
               dst.block(i).add(T_mat(i, j), tmp_vectors.block(j));
       }
 
