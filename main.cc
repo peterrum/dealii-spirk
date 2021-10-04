@@ -40,6 +40,7 @@
 #include <deal.II/lac/la_parallel_vector.h>
 #include <deal.II/lac/precondition.h>
 #include <deal.II/lac/solver_cg.h>
+#include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/sparse_matrix.h>
 #include <deal.II/lac/trilinos_precondition.h>
 #include <deal.II/lac/trilinos_sparse_matrix.h>
@@ -142,9 +143,9 @@ namespace dealii
             {
               for (const auto i : fe_values.dof_indices())
                 for (const auto j : fe_values.dof_indices())
-                  cell_matrix(i, j) +=
+                  cell_matrix(i, j) -=
                     (fe_values.shape_grad(i, q) * fe_values.shape_grad(j, q) *
-                     fe_values.JxW(q));
+                     fe_values.JxW(q)); // TODO: make addition again
             }
 
           local_dof_indices.resize(cell->get_fe().dofs_per_cell);
@@ -312,7 +313,7 @@ namespace TimeIntegrationSchemes
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
       : q(3)
-      , A_inv(load_matrix_from_file(q, "A"))
+      , A_inv(load_matrix_from_file(q, "A_inv"))
       , b_vec(load_vector_from_file(q, "b_vec_"))
       , c_vec(load_vector_from_file(q, "c_vec_"))
       , mass_matrix(mass_matrix)
@@ -344,12 +345,13 @@ namespace TimeIntegrationSchemes
       tmp.reinit(solution);
 
       for (unsigned int i = 0; i < q; ++i)
-        {
-          evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step, tmp);
-          mass_matrix.vmult(system_rhs.block(i), tmp);
-        }
+        evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
+                              system_rhs.block(i));
 
       laplace_matrix.vmult(tmp, solution);
+
+      for (unsigned int i = 0; i < q; ++i)
+        system_rhs.block(i).add(1.0, tmp);
 
       {
         std::vector<typename VectorType::value_type> values(q);
@@ -360,19 +362,17 @@ namespace TimeIntegrationSchemes
               values[j] = system_rhs.block(j)[e];
 
             for (unsigned int i = 0; i < q; ++i)
-              for (unsigned int j = 0; j < q; ++j)
-                {
-                  if (i == 0)
-                    system_rhs.block(i)[e] = tmp[e];
-
+              {
+                system_rhs.block(i)[e] = 0.0;
+                for (unsigned int j = 0; j < q; ++j)
                   system_rhs.block(i)[e] += A_inv[i][j] * values[j];
-                }
+              }
           }
       }
 
       // solve system
       SolverControl solver_control(1000, 1e-8 * system_rhs.l2_norm());
-      SolverCG<BlockVectorType> cg(solver_control);
+      SolverFGMRES<BlockVectorType> cg(solver_control);
 
       // ... create operator
       SystemMatrix sm(q, A_inv, time_step, mass_matrix, laplace_matrix);
@@ -523,7 +523,7 @@ namespace HeatEquation
 
     std::string time_integration_scheme = "ost";
     double      end_time                = 0.5;
-    double      time_step_size          = 1.0 / 500;
+    double      time_step_size          = 0.1;
 
     void
     parse(const std::string file_name)
@@ -710,7 +710,7 @@ namespace HeatEquation
         Vector<float> norm_per_cell(triangulation.n_active_cells());
         VectorTools::integrate_difference(dof_handler,
                                           solution,
-                                          AnalyticalSolution(),
+                                          AnalyticalSolution(time),
                                           norm_per_cell,
                                           QGauss<dim>(fe.degree + 2),
                                           VectorTools::L2_norm);
@@ -782,8 +782,8 @@ namespace HeatEquation
     class AnalyticalSolution : public Function<dim>
     {
     public:
-      AnalyticalSolution()
-        : Function<dim>()
+      AnalyticalSolution(const double time = 0.0)
+        : Function<dim>(1, time)
         , a_x(2.0)
         , a_y(2.0)
         , a_t(0.5)
