@@ -314,8 +314,11 @@ namespace TimeIntegrationSchemes
           &evaluate_rhs_function)
       : q(3)
       , A_inv(load_matrix_from_file(q, "A_inv"))
+      , T(load_matrix_from_file(q, "T"))
+      , T_inv(load_matrix_from_file(q, "T_inv"))
       , b_vec(load_vector_from_file(q, "b_vec_"))
       , c_vec(load_vector_from_file(q, "c_vec_"))
+      , D_vec(load_vector_from_file(q, "D_vec_"))
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
@@ -378,7 +381,8 @@ namespace TimeIntegrationSchemes
       SystemMatrix sm(q, A_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... create preconditioner
-      Preconditioner preconditioner;
+      Preconditioner preconditioner(
+        q, D_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
 
       // ... solve
       cg.solve(sm, system_solution, system_rhs, preconditioner);
@@ -435,9 +439,9 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const unsigned int                                q,
-                   const FullMatrix<typename VectorType::value_type> A_inv,
-                   const double                                      time_step,
+      SystemMatrix(const unsigned int                                 q,
+                   const FullMatrix<typename VectorType::value_type> &A_inv,
+                   const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
         : q(q)
@@ -471,35 +475,103 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const unsigned int                                q;
-      const FullMatrix<typename VectorType::value_type> A_inv;
-      const double                                      time_step;
-      const SparseMatrixType &                          mass_matrix;
-      const SparseMatrixType &                          laplace_matrix;
+      const unsigned int                                 q;
+      const FullMatrix<typename VectorType::value_type> &A_inv;
+      const double                                       time_step;
+      const SparseMatrixType &                           mass_matrix;
+      const SparseMatrixType &                           laplace_matrix;
     };
 
     class Preconditioner
     {
     public:
-      Preconditioner()
+      Preconditioner(const unsigned int                                 q,
+                     const Vector<typename VectorType::value_type> &    D_vec,
+                     const FullMatrix<typename VectorType::value_type> &T,
+                     const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double            time_step,
+                     const SparseMatrixType &mass_matrix,
+                     const SparseMatrixType &laplace_matrix)
+        : q(q)
+        , D_vec(D_vec)
+        , T_mat(T)
+        , T_mat_inv(T_inv)
+        , tau(time_step)
+        , mass_matrix(mass_matrix)
+        , laplace_matrix(laplace_matrix)
       {
-        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+        AMG_list.resize(q);
+
+        for (unsigned int i = 0; i < q; ++i)
+          {
+            AMGblock.copy_from(laplace_matrix);
+            AMGblock *= -tau;
+            AMGblock.add(D_vec[i], mass_matrix);
+
+            TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+            AMG_list[i].initialize(AMGblock, amg_data);
+          }
       }
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        dst = src; // TODO: for the first try, we use the identity matrix
-                   // as preconditioner
+        BlockVectorType temp_vec_block;
+        temp_vec_block.reinit(src);
+
+        dst = 0;
+        for (unsigned int i = 0; i < q; ++i)
+          for (unsigned int j = 0; j < q; ++j)
+            if (true || abs(T_mat_inv(i, j)) > 1e-12 /*TODO*/)
+              dst.block(i).add(T_mat_inv(i, j), src.block(j));
+
+        for (unsigned int i = 0; i < q; ++i)
+          {
+            AMGblock.copy_from(laplace_matrix);
+            AMGblock *= -tau;
+            AMGblock.add(D_vec[i], mass_matrix);
+
+            // solve
+            SolverControl solver_control;
+            solver_control.set_tolerance(1e-6);
+            SolverFGMRES<VectorType> solver(solver_control);
+
+            solver.solve(AMGblock,
+                         temp_vec_block.block(i),
+                         dst.block(i),
+                         AMG_list[i]);
+          }
+
+        dst = 0;
+        for (unsigned int i = 0; i < q; ++i)
+          for (unsigned int j = 0; j < q; ++j)
+            if (true || abs(T_mat(i, j)) > 1e-12 /*TODO*/)
+              dst.block(i).add(T_mat(i, j), temp_vec_block.block(j));
       }
 
     private:
+      const unsigned int                                 q;
+      const Vector<typename VectorType::value_type> &    D_vec;
+      const FullMatrix<typename VectorType::value_type> &T_mat;
+      const FullMatrix<typename VectorType::value_type> &T_mat_inv;
+
+      const double tau;
+
+      const SparseMatrixType &mass_matrix;
+      const SparseMatrixType &laplace_matrix;
+
+      mutable SparseMatrixType AMGblock;
+
+      std::vector<TrilinosWrappers::PreconditionAMG> AMG_list;
     };
 
     const unsigned int                                q;
     const FullMatrix<typename VectorType::value_type> A_inv;
+    const FullMatrix<typename VectorType::value_type> T;
+    const FullMatrix<typename VectorType::value_type> T_inv;
     const Vector<typename VectorType::value_type>     b_vec;
     const Vector<typename VectorType::value_type>     c_vec;
+    const Vector<typename VectorType::value_type>     D_vec;
 
     const SparseMatrixType &mass_matrix;
     const SparseMatrixType &laplace_matrix;
