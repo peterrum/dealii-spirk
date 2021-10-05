@@ -308,11 +308,12 @@ namespace TimeIntegrationSchemes
   class IRK : public Interface
   {
   public:
-    IRK(const SparseMatrixType &mass_matrix,
+    IRK(const unsigned int      n_stages,
+        const SparseMatrixType &mass_matrix,
         const SparseMatrixType &laplace_matrix,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : n_stages(3)
+      : n_stages(n_stages)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
@@ -610,6 +611,8 @@ namespace HeatEquation
     double      end_time                = 0.5;
     double      time_step_size          = 0.1;
 
+    unsigned int irk_stages = 3;
+
     void
     parse(const std::string file_name)
     {
@@ -622,6 +625,7 @@ namespace HeatEquation
                         Patterns::Selection("ost|irk"));
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
+      prm.add_parameter("IRKStages", irk_stages);
 
       std::ifstream file;
       file.open(file_name);
@@ -678,7 +682,8 @@ namespace HeatEquation
             mass_matrix, laplace_matrix, evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemes::IRK>(mass_matrix,
+          std::make_unique<TimeIntegrationSchemes::IRK>(params.irk_stages,
+                                                        mass_matrix,
                                                         laplace_matrix,
                                                         evaluate_rhs_function);
       else
