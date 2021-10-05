@@ -123,6 +123,12 @@ namespace dealii
       return Utilities::MPI::sum(temp, row_comm);
     }
 
+    const MPI_Comm &
+    get_row_mpi_communicator() const
+    {
+      return row_comm;
+    }
+
   private:
     MPI_Comm row_comm;
   };
@@ -698,7 +704,6 @@ namespace TimeIntegrationSchemes
 
     IRKStageParallel(const MPI_Comm          comm_global,
                      const MPI_Comm          comm_row,
-                     const MPI_Comm          comm_column,
                      const unsigned int      n_stages,
                      const SparseMatrixType &mass_matrix,
                      const SparseMatrixType &laplace_matrix,
@@ -710,7 +715,6 @@ namespace TimeIntegrationSchemes
                 laplace_matrix,
                 evaluate_rhs_function)
       , comm_row(comm_row)
-      , comm_column(comm_column)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -744,7 +748,7 @@ namespace TimeIntegrationSchemes
       system_rhs.add(1.0, tmp);
 
       // ... perform basis change
-      perform_basis_chance(comm_row, system_rhs, system_rhs, A_inv);
+      perform_basis_change(system_rhs, system_rhs, A_inv);
 
       // solve system
       SolverControl solver_control(n_max_iterations,
@@ -756,8 +760,10 @@ namespace TimeIntegrationSchemes
       // ... create operator and preconditioner
       if (system_matrix == nullptr)
         {
-          this->system_matrix = std::make_unique<SystemMatrix>(
-            comm_row, A_inv, time_step, mass_matrix, laplace_matrix);
+          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
+                                                               time_step,
+                                                               mass_matrix,
+                                                               laplace_matrix);
           this->preconditioner = std::make_unique<Preconditioner>(
             comm_row, d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
         }
@@ -786,16 +792,18 @@ namespace TimeIntegrationSchemes
     template <typename VectorType>
     static void
     matrix_vector_rol_operation(
-      const MPI_Comm &  comm,
-      VectorType &      dst,
-      const VectorType &src,
-      std::function<
-        void(unsigned int, unsigned int, VectorType &, const VectorType &)> fu)
+      ReshapedVector<VectorType> &                            dst,
+      const ReshapedVector<VectorType> &                      src,
+      std::function<void(unsigned int,
+                         unsigned int,
+                         ReshapedVector<VectorType> &,
+                         const ReshapedVector<VectorType> &)> fu)
     {
+      const auto         comm  = src.get_row_mpi_communicator();
       const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
       const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
 
-      VectorType temp;
+      ReshapedVector<VectorType> temp;
       temp.reinit(src, true);
       temp.copy_locally_owned_data_from(src);
 
@@ -822,9 +830,8 @@ namespace TimeIntegrationSchemes
 
     template <typename VectorType>
     static void
-    perform_basis_chance(const MPI_Comm &                                  comm,
-                         VectorType &                                      dst,
-                         const VectorType &                                src,
+    perform_basis_change(ReshapedVector<VectorType> &                      dst,
+                         const ReshapedVector<VectorType> &                src,
                          const FullMatrix<typename VectorType::value_type> T)
     {
       const auto fu =
@@ -835,19 +842,17 @@ namespace TimeIntegrationSchemes
             dst.add(T[i][j], src);
         };
 
-      matrix_vector_rol_operation<VectorType>(comm, dst, src, fu);
+      matrix_vector_rol_operation<VectorType>(dst, src, fu);
     }
 
     class SystemMatrix
     {
     public:
-      SystemMatrix(const MPI_Comm &                                   comm_row,
-                   const FullMatrix<typename VectorType::value_type> &A_inv,
+      SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
-        : comm_row(comm_row)
-        , A_inv(A_inv)
+        : A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
@@ -859,8 +864,7 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp;
         temp.reinit(src);
 
-        matrix_vector_rol_operation<ReshapedVectorType>(
-          comm_row,
+        matrix_vector_rol_operation<VectorType>(
           dst,
           src,
           [this,
@@ -879,7 +883,6 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const MPI_Comm                                     comm_row;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const SparseMatrixType &                           mass_matrix;
@@ -898,7 +901,6 @@ namespace TimeIntegrationSchemes
                      const SparseMatrixType &laplace_matrix)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
-        , comm_row(comm_row)
         , d_vec(d_vec)
         , T_mat(T)
         , T_mat_inv(T_inv)
@@ -922,7 +924,7 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        perform_basis_chance(comm_row, dst, src, T_mat_inv);
+        perform_basis_change(dst, src, T_mat_inv);
 
         SolverControl solver_control(n_max_iterations, abs_tolerance);
         SolverFGMRES<VectorType> solver(solver_control);
@@ -932,14 +934,13 @@ namespace TimeIntegrationSchemes
                      static_cast<const VectorType &>(dst),
                      preconditioners);
 
-        perform_basis_chance(comm_row, dst, temp, T_mat);
+        perform_basis_change(dst, temp, T_mat);
       }
 
     private:
       const unsigned int n_max_iterations;
       const double       abs_tolerance;
 
-      const MPI_Comm                                     comm_row;
       const Vector<typename VectorType::value_type> &    d_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
       const FullMatrix<typename VectorType::value_type> &T_mat_inv;
@@ -954,7 +955,6 @@ namespace TimeIntegrationSchemes
     };
 
     const MPI_Comm comm_row;
-    const MPI_Comm comm_column;
 
     const unsigned int n_max_iterations;
     const double       rel_tolerance;
@@ -1066,7 +1066,6 @@ namespace HeatEquation
           std::make_unique<TimeIntegrationSchemes::IRKStageParallel>(
             comm_global,
             comm_row,
-            comm_column,
             params.irk_stages,
             mass_matrix,
             laplace_matrix,
