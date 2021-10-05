@@ -1,0 +1,5 @@
+{ 
+    "TimeIntegrationScheme" : "spirk", 
+    "IRKStages" : "3" 
+}
+

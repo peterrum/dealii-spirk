@@ -103,7 +103,8 @@ namespace dealii
     virtual Number
     l2_norm() const override
     {
-      return Utilities::MPI::sum(VT::l2_norm(), row_comm);
+      const Number temp = VT::l2_norm();
+      return std::sqrt(Utilities::MPI::sum(temp * temp, row_comm));
     }
 
   private:
@@ -984,7 +985,7 @@ namespace HeatEquation
       prm.add_parameter("TimeIntegrationScheme",
                         time_integration_scheme,
                         "",
-                        Patterns::Selection("ost|irk"));
+                        Patterns::Selection("ost|irk|spirk"));
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
@@ -1398,6 +1399,9 @@ main(int argc, char **argv)
         params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
       const unsigned int size_v =
         Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) / size_x;
+
+      AssertThrow(size_v > 0,
+                  ExcMessage("Not enough ranks have been provided!"));
 
       MPI_Comm comm_global =
         Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD, size_x, size_v);
