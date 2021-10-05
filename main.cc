@@ -306,18 +306,16 @@ namespace TimeIntegrationSchemes
   /**
    * IRK implementation.
    */
-  class IRK : public Interface
+  class IRKBase : public Interface
   {
   public:
-    IRK(const MPI_Comm          comm,
-        const unsigned int      n_stages,
-        const SparseMatrixType &mass_matrix,
-        const SparseMatrixType &laplace_matrix,
-        const std::function<void(const double, VectorType &)>
-          &evaluate_rhs_function)
+    IRKBase(const MPI_Comm          comm,
+            const unsigned int      n_stages,
+            const SparseMatrixType &mass_matrix,
+            const SparseMatrixType &laplace_matrix,
+            const std::function<void(const double, VectorType &)>
+              &evaluate_rhs_function)
       : n_stages(n_stages)
-      , n_max_iterations(1000)
-      , rel_tolerance(1e-8)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
       , T(load_matrix_from_file(n_stages, "T"))
       , T_inv(load_matrix_from_file(n_stages, "T_inv"))
@@ -328,6 +326,86 @@ namespace TimeIntegrationSchemes
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
+    {}
+
+  private:
+    static FullMatrix<typename VectorType::value_type>
+    load_matrix_from_file(const unsigned int n_stages, const std::string label)
+    {
+      FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
+
+      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
+
+      unsigned int m, n;
+      fin >> m >> n;
+
+      AssertDimension(m, n_stages);
+      AssertDimension(n, n_stages);
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned j = 0; j < n_stages; ++j)
+          fin >> result[i][j];
+
+      return result;
+    }
+
+    static Vector<typename VectorType::value_type>
+    load_vector_from_file(const unsigned int n_stages, const std::string label)
+    {
+      Vector<typename VectorType::value_type> result(n_stages);
+
+      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
+
+      unsigned int m, n;
+      fin >> m >> n;
+
+      AssertDimension(m, 1);
+      AssertDimension(n, n_stages);
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        fin >> result[i];
+
+      return result;
+    }
+
+  protected:
+    const unsigned int                                n_stages;
+    const FullMatrix<typename VectorType::value_type> A_inv;
+    const FullMatrix<typename VectorType::value_type> T;
+    const FullMatrix<typename VectorType::value_type> T_inv;
+    const Vector<typename VectorType::value_type>     b_vec;
+    const Vector<typename VectorType::value_type>     c_vec;
+    const Vector<typename VectorType::value_type>     d_vec;
+
+    const SparseMatrixType &mass_matrix;
+    const SparseMatrixType &laplace_matrix;
+
+    const std::function<void(const double, VectorType &)> evaluate_rhs_function;
+
+    ConditionalOStream pcout;
+  };
+
+
+
+  /**
+   * IRK implementation.
+   */
+  class IRK : public IRKBase
+  {
+  public:
+    IRK(const MPI_Comm          comm,
+        const unsigned int      n_stages,
+        const SparseMatrixType &mass_matrix,
+        const SparseMatrixType &laplace_matrix,
+        const std::function<void(const double, VectorType &)>
+          &evaluate_rhs_function)
+      : IRKBase(comm,
+                n_stages,
+                mass_matrix,
+                laplace_matrix,
+                evaluate_rhs_function)
+      , n_max_iterations(1000)
+      , rel_tolerance(1e-8)
     {}
 
     void
@@ -410,46 +488,6 @@ namespace TimeIntegrationSchemes
     }
 
   private:
-    static FullMatrix<typename VectorType::value_type>
-    load_matrix_from_file(const unsigned int n_stages, const std::string label)
-    {
-      FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
-
-      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
-
-      unsigned int m, n;
-      fin >> m >> n;
-
-      AssertDimension(m, n_stages);
-      AssertDimension(n, n_stages);
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        for (unsigned j = 0; j < n_stages; ++j)
-          fin >> result[i][j];
-
-      return result;
-    }
-
-    static Vector<typename VectorType::value_type>
-    load_vector_from_file(const unsigned int n_stages, const std::string label)
-    {
-      Vector<typename VectorType::value_type> result(n_stages);
-
-      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
-
-      unsigned int m, n;
-      fin >> m >> n;
-
-      AssertDimension(m, 1);
-      AssertDimension(n, n_stages);
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        fin >> result[i];
-
-      return result;
-    }
-
-
     class SystemMatrix
     {
     public:
@@ -576,22 +614,8 @@ namespace TimeIntegrationSchemes
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
     };
 
-    const unsigned int                                n_stages;
-    const unsigned int                                n_max_iterations;
-    const double                                      rel_tolerance;
-    const FullMatrix<typename VectorType::value_type> A_inv;
-    const FullMatrix<typename VectorType::value_type> T;
-    const FullMatrix<typename VectorType::value_type> T_inv;
-    const Vector<typename VectorType::value_type>     b_vec;
-    const Vector<typename VectorType::value_type>     c_vec;
-    const Vector<typename VectorType::value_type>     d_vec;
-
-    const SparseMatrixType &mass_matrix;
-    const SparseMatrixType &laplace_matrix;
-
-    const std::function<void(const double, VectorType &)> evaluate_rhs_function;
-
-    ConditionalOStream pcout;
+    const unsigned int n_max_iterations;
+    const double       rel_tolerance;
 
     mutable double time_step = 0.0;
 
