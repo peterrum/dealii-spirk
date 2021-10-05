@@ -184,7 +184,8 @@ namespace TimeIntegrationSchemes
   class OneStepTheta : public Interface
   {
   public:
-    OneStepTheta(const SparseMatrixType &mass_matrix,
+    OneStepTheta(const MPI_Comm          comm,
+                 const SparseMatrixType &mass_matrix,
                  const SparseMatrixType &laplace_matrix,
                  const std::function<void(const double, VectorType &)>
                    &evaluate_rhs_function)
@@ -192,7 +193,7 @@ namespace TimeIntegrationSchemes
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
-      , pcout(std::cout, Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
 
     void
@@ -308,7 +309,8 @@ namespace TimeIntegrationSchemes
   class IRK : public Interface
   {
   public:
-    IRK(const unsigned int      n_stages,
+    IRK(const MPI_Comm          comm,
+        const unsigned int      n_stages,
         const SparseMatrixType &mass_matrix,
         const SparseMatrixType &laplace_matrix,
         const std::function<void(const double, VectorType &)>
@@ -325,7 +327,7 @@ namespace TimeIntegrationSchemes
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
-      , pcout(std::cout, Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
 
     void
@@ -639,13 +641,19 @@ namespace HeatEquation
   class Problem
   {
   public:
-    Problem(const Parameters &params)
+    Problem(const Parameters &params,
+            const MPI_Comm    comm_global,
+            const MPI_Comm    comm_row,
+            const MPI_Comm    comm_column)
       : params(params)
-      , triangulation(MPI_COMM_WORLD)
+      , comm_global(comm_global)
+      , comm_row(comm_row)
+      , comm_column(comm_column)
+      , triangulation(comm_column)
       , fe(params.fe_degree)
       , quadrature(params.fe_degree + 1)
       , dof_handler(triangulation)
-      , pcout(std::cout, Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      , pcout(std::cout, Utilities::MPI::this_mpi_process(comm_global) == 0)
     {}
 
     void
@@ -679,10 +687,11 @@ namespace HeatEquation
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            mass_matrix, laplace_matrix, evaluate_rhs_function);
+            comm_column, mass_matrix, laplace_matrix, evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemes::IRK>(params.irk_stages,
+          std::make_unique<TimeIntegrationSchemes::IRK>(comm_column,
+                                                        params.irk_stages,
                                                         mass_matrix,
                                                         laplace_matrix,
                                                         evaluate_rhs_function);
@@ -817,6 +826,10 @@ namespace HeatEquation
 
     const Parameters &params;
 
+    const MPI_Comm comm_global;
+    const MPI_Comm comm_row;
+    const MPI_Comm comm_column;
+
     parallel::distributed::Triangulation<dim> triangulation;
     FE_Q<dim>                                 fe;
     QGauss<dim>                               quadrature;
@@ -906,6 +919,98 @@ namespace HeatEquation
 } // namespace HeatEquation
 
 
+namespace dealii
+{
+  namespace Utilities
+  {
+    namespace MPI
+    {
+      std::pair<unsigned int, unsigned int>
+      lex_to_pair(const unsigned int rank,
+                  const unsigned int size1,
+                  const unsigned int size2)
+      {
+        AssertThrow(rank < size1 * size2, dealii::ExcMessage("Invalid rank."));
+        return {rank % size1, rank / size1};
+      }
+
+
+
+      MPI_Comm
+      create_row_comm(const MPI_Comm &   comm,
+                      const unsigned int size1,
+                      const unsigned int size2)
+      {
+        int size, rank;
+        MPI_Comm_size(comm, &size);
+        AssertThrow(static_cast<unsigned int>(size) == size1 * size2,
+                    dealii::ExcMessage("Invalid communicator size."));
+
+        MPI_Comm_rank(comm, &rank);
+
+        MPI_Comm row_comm;
+        MPI_Comm_split(comm,
+                       lex_to_pair(rank, size1, size2).second,
+                       rank,
+                       &row_comm);
+        return row_comm;
+      }
+
+
+
+      MPI_Comm
+      create_column_comm(const MPI_Comm &   comm,
+                         const unsigned int size1,
+                         const unsigned int size2)
+      {
+        int size, rank;
+        MPI_Comm_size(comm, &size);
+        AssertThrow(static_cast<unsigned int>(size) == size1 * size2,
+                    dealii::ExcMessage("Invalid communicator size."));
+
+        MPI_Comm_rank(comm, &rank);
+
+        MPI_Comm col_comm;
+        MPI_Comm_split(comm,
+                       lex_to_pair(rank, size1, size2).first,
+                       rank,
+                       &col_comm);
+        return col_comm;
+      }
+
+
+
+      MPI_Comm
+      create_rectangular_comm(const MPI_Comm &   comm,
+                              const unsigned int size_x,
+                              const unsigned int size_v)
+      {
+        int rank, size;
+        MPI_Comm_rank(comm, &rank);
+        MPI_Comm_size(comm, &size);
+
+        AssertThrow((size_x * size_v) <= static_cast<unsigned int>(size),
+                    dealii::ExcMessage("Not enough ranks."));
+
+        MPI_Comm sub_comm;
+        MPI_Comm_split(comm,
+                       (static_cast<unsigned int>(rank) < (size_x * size_v)),
+                       rank,
+                       &sub_comm);
+
+        if (static_cast<unsigned int>(rank) < (size_x * size_v))
+          return sub_comm;
+        else
+          {
+            MPI_Comm_free(&sub_comm);
+            return MPI_COMM_NULL;
+          }
+      }
+    } // namespace MPI
+  }   // namespace Utilities
+} // namespace dealii
+
+
 
 int
 main(int argc, char **argv)
@@ -919,8 +1024,31 @@ main(int argc, char **argv)
       if (argc == 2)
         params.parse(std::string(argv[1]));
 
-      HeatEquation::Problem<2> heat_equation_solver(params);
-      heat_equation_solver.run();
+      const unsigned int size_x = 1;
+      const unsigned int size_v =
+        Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD);
+
+      MPI_Comm comm_global =
+        Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD, size_x, size_v);
+
+      if (comm_global != MPI_COMM_NULL)
+        {
+          MPI_Comm comm_row =
+            Utilities::MPI::create_row_comm(comm_global, size_x, size_v);
+          MPI_Comm comm_column =
+            Utilities::MPI::create_column_comm(comm_global, size_x, size_v);
+
+
+          HeatEquation::Problem<2> heat_equation_solver(params,
+                                                        comm_global,
+                                                        comm_row,
+                                                        comm_column);
+          heat_equation_solver.run();
+
+          MPI_Comm_free(&comm_column);
+          MPI_Comm_free(&comm_row);
+          MPI_Comm_free(&comm_global);
+        }
     }
   catch (std::exception &exc)
     {
