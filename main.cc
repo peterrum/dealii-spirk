@@ -622,6 +622,135 @@ namespace TimeIntegrationSchemes
     mutable std::unique_ptr<SystemMatrix>   system_matrix;
     mutable std::unique_ptr<Preconditioner> preconditioner;
   };
+
+
+
+  /**
+   * IRK implementation.
+   */
+  class IRKStageParallel : public IRKBase
+  {
+  public:
+    IRKStageParallel(const MPI_Comm          comm,
+                     const unsigned int      n_stages,
+                     const SparseMatrixType &mass_matrix,
+                     const SparseMatrixType &laplace_matrix,
+                     const std::function<void(const double, VectorType &)>
+                       &evaluate_rhs_function)
+      : IRKBase(comm,
+                n_stages,
+                mass_matrix,
+                laplace_matrix,
+                evaluate_rhs_function)
+      , n_max_iterations(1000)
+      , rel_tolerance(1e-8)
+    {}
+
+    void
+    solve(VectorType &       solution,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const override
+    {
+      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
+
+      AssertThrow((this->time_step == 0 || this->time_step == time_step),
+                  ExcNotImplemented());
+
+      this->time_step = time_step;
+
+      (void)solution;
+    }
+
+  private:
+    class SystemMatrix
+    {
+    public:
+      SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
+                   const double                                       time_step,
+                   const SparseMatrixType &mass_matrix,
+                   const SparseMatrixType &laplace_matrix)
+        : n_stages(A_inv.m())
+        , A_inv(A_inv)
+        , time_step(time_step)
+        , mass_matrix(mass_matrix)
+        , laplace_matrix(laplace_matrix)
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        (void)dst;
+        (void)src;
+
+        AssertThrow(false, ExcNotImplemented());
+      }
+
+    private:
+      const unsigned int                                 n_stages;
+      const FullMatrix<typename VectorType::value_type> &A_inv;
+      const double                                       time_step;
+      const SparseMatrixType &                           mass_matrix;
+      const SparseMatrixType &                           laplace_matrix;
+    };
+
+    class Preconditioner
+    {
+    public:
+      Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
+                     const FullMatrix<typename VectorType::value_type> &T,
+                     const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double            time_step,
+                     const SparseMatrixType &mass_matrix,
+                     const SparseMatrixType &laplace_matrix)
+        : n_max_iterations(100)
+        , abs_tolerance(1e-6)
+        , cut_off_tolerance(1e-12)
+        , n_stages(d_vec.size())
+        , d_vec(d_vec)
+        , T_mat(T)
+        , T_mat_inv(T_inv)
+        , tau(time_step)
+        , mass_matrix(mass_matrix)
+        , laplace_matrix(laplace_matrix)
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        (void)dst;
+        (void)src;
+
+        AssertThrow(false, ExcNotImplemented());
+      }
+
+    private:
+      const unsigned int n_max_iterations;
+      const double       abs_tolerance;
+      const double       cut_off_tolerance;
+
+      const unsigned int                                 n_stages;
+      const Vector<typename VectorType::value_type> &    d_vec;
+      const FullMatrix<typename VectorType::value_type> &T_mat;
+      const FullMatrix<typename VectorType::value_type> &T_mat_inv;
+
+      const double tau;
+
+      const SparseMatrixType &mass_matrix;
+      const SparseMatrixType &laplace_matrix;
+
+      std::vector<SparseMatrixType>                  operators;
+      std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
+    };
+
+    const unsigned int n_max_iterations;
+    const double       rel_tolerance;
+
+    mutable double time_step = 0.0;
+
+    mutable std::unique_ptr<SystemMatrix>   system_matrix;
+    mutable std::unique_ptr<Preconditioner> preconditioner;
+  };
 } // namespace TimeIntegrationSchemes
 
 
@@ -719,6 +848,14 @@ namespace HeatEquation
                                                         mass_matrix,
                                                         laplace_matrix,
                                                         evaluate_rhs_function);
+      else if (params.time_integration_scheme == "spirk")
+        time_integration_scheme =
+          std::make_unique<TimeIntegrationSchemes::IRKStageParallel>(
+            comm_column,
+            params.irk_stages,
+            mass_matrix,
+            laplace_matrix,
+            evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
 
@@ -1048,9 +1185,10 @@ main(int argc, char **argv)
       if (argc == 2)
         params.parse(std::string(argv[1]));
 
-      const unsigned int size_x = 1;
+      const unsigned int size_x =
+        params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
       const unsigned int size_v =
-        Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD);
+        Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) / size_x;
 
       MPI_Comm comm_global =
         Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD, size_x, size_v);
