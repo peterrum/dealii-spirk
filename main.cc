@@ -107,6 +107,22 @@ namespace dealii
       return std::sqrt(Utilities::MPI::sum(temp * temp, row_comm));
     }
 
+    virtual Number
+    add_and_dot(const Number                                    a,
+                const LinearAlgebra::VectorSpaceVector<Number> &V,
+                const LinearAlgebra::VectorSpaceVector<Number> &W) override
+    {
+      const Number temp = VT::add_and_dot(a, V, W);
+      return Utilities::MPI::sum(temp, row_comm);
+    }
+
+    virtual Number
+    operator*(const LinearAlgebra::VectorSpaceVector<Number> &V) const override
+    {
+      const Number temp = VT::operator*(V);
+      return Utilities::MPI::sum(temp, row_comm);
+    }
+
   private:
     MPI_Comm row_comm;
   };
