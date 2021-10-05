@@ -631,17 +631,21 @@ namespace TimeIntegrationSchemes
   class IRKStageParallel : public IRKBase
   {
   public:
-    IRKStageParallel(const MPI_Comm          comm,
+    IRKStageParallel(const MPI_Comm          comm_global,
+                     const MPI_Comm          comm_row,
+                     const MPI_Comm          comm_column,
                      const unsigned int      n_stages,
                      const SparseMatrixType &mass_matrix,
                      const SparseMatrixType &laplace_matrix,
                      const std::function<void(const double, VectorType &)>
                        &evaluate_rhs_function)
-      : IRKBase(comm,
+      : IRKBase(comm_global,
                 n_stages,
                 mass_matrix,
                 laplace_matrix,
                 evaluate_rhs_function)
+      , comm_row(comm_row)
+      , comm_column(comm_column)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -743,6 +747,9 @@ namespace TimeIntegrationSchemes
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
     };
 
+    const MPI_Comm comm_row;
+    const MPI_Comm comm_column;
+
     const unsigned int n_max_iterations;
     const double       rel_tolerance;
 
@@ -840,10 +847,10 @@ namespace HeatEquation
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            comm_column, mass_matrix, laplace_matrix, evaluate_rhs_function);
+            comm_global, mass_matrix, laplace_matrix, evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemes::IRK>(comm_column,
+          std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
                                                         params.irk_stages,
                                                         mass_matrix,
                                                         laplace_matrix,
@@ -851,6 +858,8 @@ namespace HeatEquation
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRKStageParallel>(
+            comm_global,
+            comm_row,
             comm_column,
             params.irk_stages,
             mass_matrix,
