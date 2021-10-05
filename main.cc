@@ -603,8 +603,8 @@ namespace HeatEquation
 {
   struct Parameters
   {
-    unsigned int fe_degree     = 1;
-    unsigned int n_refinements = 4;
+    unsigned int fe_degree     = 4;
+    unsigned int n_refinements = 5;
 
     std::string time_integration_scheme = "ost";
     double      end_time                = 0.5;
@@ -665,6 +665,8 @@ namespace HeatEquation
         rhs_function.set_time(time);
         VectorTools::create_right_hand_side(
           dof_handler, quadrature, rhs_function, tmp, constraints);
+        tmp.compress(VectorOperation::values::add); // TODO: should be done by
+        // deal.II
       };
 
       std::unique_ptr<TimeIntegrationSchemes::Interface>
