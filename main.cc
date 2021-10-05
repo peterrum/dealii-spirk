@@ -46,6 +46,7 @@
 #include <deal.II/lac/trilinos_sparse_matrix.h>
 #include <deal.II/lac/trilinos_sparsity_pattern.h>
 #include <deal.II/lac/vector.h>
+#include <deal.II/lac/vector_memory.templates.h>
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
@@ -64,6 +65,51 @@ using SparseMatrixType = TrilinosWrappers::SparseMatrix;
 
 namespace dealii
 {
+  template <typename VT>
+  class ReshapedVector : public VT
+  {
+  public:
+    using Number = typename VT::value_type;
+
+    virtual ReshapedVector<VT> &
+    operator=(const Number s) override
+    {
+      VT::operator=(s);
+
+      return *this;
+    }
+
+    void
+    reinit(const ReshapedVector<VT> &V)
+    {
+      VT::reinit(V);
+      this->row_comm = V.row_comm;
+    }
+
+    void
+    reinit(const ReshapedVector<VT> &V, const bool omit_zeroing_entries)
+    {
+      VT::reinit(V, omit_zeroing_entries);
+      this->row_comm = V.row_comm;
+    }
+
+    void
+    reinit(const VT &V, const MPI_Comm &row_comm)
+    {
+      VT::reinit(V);
+      this->row_comm = row_comm;
+    }
+
+    virtual Number
+    l2_norm() const override
+    {
+      return Utilities::MPI::sum(VT::l2_norm(), row_comm);
+    }
+
+  private:
+    MPI_Comm row_comm;
+  };
+
   namespace MatrixCreator
   {
     template <int dim, int spacedim, typename number>
@@ -631,6 +677,8 @@ namespace TimeIntegrationSchemes
   class IRKStageParallel : public IRKBase
   {
   public:
+    using ReshapedVectorType = ReshapedVector<VectorType>;
+
     IRKStageParallel(const MPI_Comm          comm_global,
                      const MPI_Comm          comm_row,
                      const MPI_Comm          comm_column,
@@ -663,18 +711,126 @@ namespace TimeIntegrationSchemes
 
       this->time_step = time_step;
 
-      (void)solution;
+      ReshapedVectorType system_rhs, system_solution;
+      VectorType         tmp;
+
+      system_rhs.reinit(solution, comm_row);
+      system_solution.reinit(solution, comm_row);
+      tmp.reinit(solution);
+
+      const unsigned int my_stage = Utilities::MPI::this_mpi_process(comm_row);
+
+      // setup right-hand-side vector
+      evaluate_rhs_function(time + (c_vec[my_stage] - 1.0) * time_step,
+                            system_rhs);
+      laplace_matrix.vmult(tmp, solution);
+      system_rhs.add(1.0, tmp);
+
+      // ... perform basis change
+      perform_basis_chance(comm_row, system_rhs, system_rhs, A_inv);
+
+      // solve system
+      SolverControl solver_control(n_max_iterations,
+                                   rel_tolerance *
+                                     system_rhs.l2_norm() /*TODO*/);
+
+      SolverFGMRES<ReshapedVectorType> cg(solver_control);
+
+      // ... create operator and preconditioner
+      if (system_matrix == nullptr)
+        {
+          this->system_matrix = std::make_unique<SystemMatrix>(
+            comm_row, A_inv, time_step, mass_matrix, laplace_matrix);
+          this->preconditioner = std::make_unique<Preconditioner>(
+            comm_row, d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+        }
+
+      // ... solve
+      cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
+
+      pcout << "     " << solver_control.last_step() << " CG iterations."
+            << std::endl;
+
+      // accumulate result in solution
+      if (my_stage == 0)
+        solution += system_solution;
+      else
+        solution = system_solution;
+
+      MPI_Allreduce(MPI_IN_PLACE,
+                    solution.get_values(),
+                    solution.locally_owned_size(),
+                    MPI_DOUBLE,
+                    MPI_SUM,
+                    comm_row);
     }
 
   private:
+    template <typename VectorType>
+    static void
+    matrix_vector_rol_operation(
+      const MPI_Comm &  comm,
+      VectorType &      dst,
+      const VectorType &src,
+      std::function<
+        void(unsigned int, unsigned int, VectorType &, const VectorType &)> fu)
+    {
+      const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
+      const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
+
+      VectorType temp;
+      temp.reinit(src, true);
+      temp.copy_locally_owned_data_from(src);
+
+      for (unsigned int k = 0; k < nproc; ++k)
+        {
+          if (k != 0)
+            {
+              const auto ierr = MPI_Sendrecv_replace(temp.get_values(),
+                                                     temp.locally_owned_size(),
+                                                     MPI_DOUBLE,
+                                                     (rank + nproc - 1) % nproc,
+                                                     k,
+                                                     (rank + nproc + 1) % nproc,
+                                                     k,
+                                                     comm,
+                                                     MPI_STATUS_IGNORE);
+
+              AssertThrowMPI(ierr);
+            }
+
+          fu(rank, (k + rank) % nproc, dst, temp);
+        }
+    }
+
+    template <typename VectorType>
+    static void
+    perform_basis_chance(const MPI_Comm &                                  comm,
+                         VectorType &                                      dst,
+                         const VectorType &                                src,
+                         const FullMatrix<typename VectorType::value_type> T)
+    {
+      const auto fu =
+        [&T](const auto i, const auto j, auto &dst, const auto &src) {
+          if (i == j)
+            dst.equ(T[i][j], src);
+          else
+            dst.add(T[i][j], src);
+        };
+
+      matrix_vector_rol_operation<VectorType>(comm, dst, src, fu);
+    }
+
     class SystemMatrix
     {
     public:
-      SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
+      SystemMatrix(const MPI_Comm &                                   comm_row,
+                   const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
-        : n_stages(A_inv.m())
+        : comm_row(comm_row)
+        , n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
@@ -682,15 +838,32 @@ namespace TimeIntegrationSchemes
       {}
 
       void
-      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      vmult(ReshapedVectorType &dst, const ReshapedVectorType &src) const
       {
-        (void)dst;
-        (void)src;
+        ReshapedVectorType temp;
+        temp.reinit(src);
 
-        AssertThrow(false, ExcNotImplemented());
+        matrix_vector_rol_operation<ReshapedVectorType>(
+          comm_row,
+          dst,
+          src,
+          [this,
+           &temp](const auto i, const auto j, auto &dst, const auto &src) {
+            if (i == j)
+              {
+                laplace_matrix.vmult(static_cast<VectorType &>(temp),
+                                     static_cast<const VectorType &>(src));
+                dst.equ(-time_step, temp);
+              }
+
+            mass_matrix.vmult(static_cast<VectorType &>(temp),
+                              static_cast<const VectorType &>(src));
+            dst.add(A_inv(i, j), temp);
+          });
       }
 
     private:
+      const MPI_Comm                                     comm_row;
       const unsigned int                                 n_stages;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
@@ -701,7 +874,8 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
+      Preconditioner(const MPI_Comm &                               comm_row,
+                     const Vector<typename VectorType::value_type> &d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
                      const double            time_step,
@@ -710,6 +884,7 @@ namespace TimeIntegrationSchemes
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , cut_off_tolerance(1e-12)
+        , comm_row(comm_row)
         , n_stages(d_vec.size())
         , d_vec(d_vec)
         , T_mat(T)
@@ -717,15 +892,39 @@ namespace TimeIntegrationSchemes
         , tau(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
-      {}
+      {
+        operators.resize(n_stages);
+        preconditioners.resize(n_stages);
+
+        const unsigned int i = Utilities::MPI::this_mpi_process(comm_row);
+
+        operators[i].copy_from(laplace_matrix);
+        operators[i] *= -tau;
+        operators[i].add(d_vec[i], mass_matrix);
+
+        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+        preconditioners[i].initialize(operators[i], amg_data);
+      }
 
       void
-      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      vmult(ReshapedVectorType &dst, const ReshapedVectorType &src) const
       {
-        (void)dst;
-        (void)src;
+        ReshapedVectorType temp; // TODO
+        temp.reinit(src);        //
 
-        AssertThrow(false, ExcNotImplemented());
+        const unsigned int i = Utilities::MPI::this_mpi_process(comm_row);
+
+        perform_basis_chance(comm_row, dst, src, T_mat_inv);
+
+        SolverControl solver_control(n_max_iterations, abs_tolerance);
+        SolverFGMRES<VectorType> solver(solver_control);
+
+        solver.solve(operators[i],
+                     static_cast<VectorType &>(temp),
+                     static_cast<const VectorType &>(dst),
+                     preconditioners[i]);
+
+        perform_basis_chance(comm_row, dst, temp, T_mat);
       }
 
     private:
@@ -733,6 +932,7 @@ namespace TimeIntegrationSchemes
       const double       abs_tolerance;
       const double       cut_off_tolerance;
 
+      const MPI_Comm                                     comm_row;
       const unsigned int                                 n_stages;
       const Vector<typename VectorType::value_type> &    d_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
