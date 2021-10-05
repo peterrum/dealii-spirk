@@ -367,7 +367,7 @@ namespace TimeIntegrationSchemes
 
 
   /**
-   * IRK implementation.
+   * IRK base class.
    */
   class IRKBase : public Interface
   {
@@ -451,7 +451,7 @@ namespace TimeIntegrationSchemes
 
 
   /**
-   * IRK implementation.
+   * A parallel IRK implementation.
    */
   class IRK : public IRKBase
   {
@@ -689,7 +689,7 @@ namespace TimeIntegrationSchemes
 
 
   /**
-   * IRK implementation.
+   * A stage-parallel IRK implementation.
    */
   class IRKStageParallel : public IRKBase
   {
@@ -847,7 +847,6 @@ namespace TimeIntegrationSchemes
                    const SparseMatrixType &mass_matrix,
                    const SparseMatrixType &laplace_matrix)
         : comm_row(comm_row)
-        , n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
@@ -881,7 +880,6 @@ namespace TimeIntegrationSchemes
 
     private:
       const MPI_Comm                                     comm_row;
-      const unsigned int                                 n_stages;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const SparseMatrixType &                           mass_matrix;
@@ -900,9 +898,7 @@ namespace TimeIntegrationSchemes
                      const SparseMatrixType &laplace_matrix)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
-        , cut_off_tolerance(1e-12)
         , comm_row(comm_row)
-        , n_stages(d_vec.size())
         , d_vec(d_vec)
         , T_mat(T)
         , T_mat_inv(T_inv)
@@ -910,17 +906,14 @@ namespace TimeIntegrationSchemes
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
       {
-        operators.resize(n_stages);
-        preconditioners.resize(n_stages);
+        const auto my_stage = Utilities::MPI::this_mpi_process(comm_row);
 
-        const unsigned int i = Utilities::MPI::this_mpi_process(comm_row);
-
-        operators[i].copy_from(laplace_matrix);
-        operators[i] *= -tau;
-        operators[i].add(d_vec[i], mass_matrix);
+        linear_operator.copy_from(laplace_matrix);
+        linear_operator *= -tau;
+        linear_operator.add(d_vec[my_stage], mass_matrix);
 
         TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        preconditioners[i].initialize(operators[i], amg_data);
+        preconditioners.initialize(linear_operator, amg_data);
       }
 
       void
@@ -929,17 +922,15 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        const unsigned int i = Utilities::MPI::this_mpi_process(comm_row);
-
         perform_basis_chance(comm_row, dst, src, T_mat_inv);
 
         SolverControl solver_control(n_max_iterations, abs_tolerance);
         SolverFGMRES<VectorType> solver(solver_control);
 
-        solver.solve(operators[i],
+        solver.solve(linear_operator,
                      static_cast<VectorType &>(temp),
                      static_cast<const VectorType &>(dst),
-                     preconditioners[i]);
+                     preconditioners);
 
         perform_basis_chance(comm_row, dst, temp, T_mat);
       }
@@ -947,10 +938,8 @@ namespace TimeIntegrationSchemes
     private:
       const unsigned int n_max_iterations;
       const double       abs_tolerance;
-      const double       cut_off_tolerance;
 
       const MPI_Comm                                     comm_row;
-      const unsigned int                                 n_stages;
       const Vector<typename VectorType::value_type> &    d_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
       const FullMatrix<typename VectorType::value_type> &T_mat_inv;
@@ -960,8 +949,8 @@ namespace TimeIntegrationSchemes
       const SparseMatrixType &mass_matrix;
       const SparseMatrixType &laplace_matrix;
 
-      std::vector<SparseMatrixType>                  operators;
-      std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
+      SparseMatrixType                  linear_operator;
+      TrilinosWrappers::PreconditionAMG preconditioners;
     };
 
     const MPI_Comm comm_row;
