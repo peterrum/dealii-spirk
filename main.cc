@@ -65,73 +65,76 @@ using SparseMatrixType = TrilinosWrappers::SparseMatrix;
 
 namespace dealii
 {
-  template <typename VT>
-  class ReshapedVector : public VT
+  namespace LinearAlgebra
   {
-  public:
-    using Number = typename VT::value_type;
-
-    virtual ReshapedVector<VT> &
-    operator=(const Number s) override
+    template <typename VT>
+    class ReshapedVector : public VT
     {
-      VT::operator=(s);
+    public:
+      using Number = typename VT::value_type;
 
-      return *this;
-    }
+      virtual ReshapedVector<VT> &
+      operator=(const Number s) override
+      {
+        VT::operator=(s);
 
-    void
-    reinit(const ReshapedVector<VT> &V)
-    {
-      VT::reinit(V);
-      this->row_comm = V.row_comm;
-    }
+        return *this;
+      }
 
-    void
-    reinit(const ReshapedVector<VT> &V, const bool omit_zeroing_entries)
-    {
-      VT::reinit(V, omit_zeroing_entries);
-      this->row_comm = V.row_comm;
-    }
+      void
+      reinit(const ReshapedVector<VT> &V)
+      {
+        VT::reinit(V);
+        this->row_comm = V.row_comm;
+      }
 
-    void
-    reinit(const VT &V, const MPI_Comm &row_comm)
-    {
-      VT::reinit(V);
-      this->row_comm = row_comm;
-    }
+      void
+      reinit(const ReshapedVector<VT> &V, const bool omit_zeroing_entries)
+      {
+        VT::reinit(V, omit_zeroing_entries);
+        this->row_comm = V.row_comm;
+      }
 
-    virtual Number
-    l2_norm() const override
-    {
-      const Number temp = VT::l2_norm();
-      return std::sqrt(Utilities::MPI::sum(temp * temp, row_comm));
-    }
+      void
+      reinit(const VT &V, const MPI_Comm &row_comm)
+      {
+        VT::reinit(V);
+        this->row_comm = row_comm;
+      }
 
-    virtual Number
-    add_and_dot(const Number                                    a,
-                const LinearAlgebra::VectorSpaceVector<Number> &V,
-                const LinearAlgebra::VectorSpaceVector<Number> &W) override
-    {
-      const Number temp = VT::add_and_dot(a, V, W);
-      return Utilities::MPI::sum(temp, row_comm);
-    }
+      virtual Number
+      l2_norm() const override
+      {
+        const Number temp = VT::l2_norm();
+        return std::sqrt(Utilities::MPI::sum(temp * temp, row_comm));
+      }
 
-    virtual Number
-    operator*(const LinearAlgebra::VectorSpaceVector<Number> &V) const override
-    {
-      const Number temp = VT::operator*(V);
-      return Utilities::MPI::sum(temp, row_comm);
-    }
+      virtual Number
+      add_and_dot(const Number                     a,
+                  const VectorSpaceVector<Number> &V,
+                  const VectorSpaceVector<Number> &W) override
+      {
+        const Number temp = VT::add_and_dot(a, V, W);
+        return Utilities::MPI::sum(temp, row_comm);
+      }
 
-    const MPI_Comm &
-    get_row_mpi_communicator() const
-    {
-      return row_comm;
-    }
+      virtual Number
+      operator*(const VectorSpaceVector<Number> &V) const override
+      {
+        const Number temp = VT::operator*(V);
+        return Utilities::MPI::sum(temp, row_comm);
+      }
 
-  private:
-    MPI_Comm row_comm;
-  };
+      const MPI_Comm &
+      get_row_mpi_communicator() const
+      {
+        return row_comm;
+      }
+
+    private:
+      MPI_Comm row_comm;
+    };
+  } // namespace LinearAlgebra
 
   namespace MatrixCreator
   {
@@ -228,6 +231,94 @@ namespace dealii
       matrix.compress(VectorOperation::values::add);
     }
   } // namespace MatrixCreator
+
+  namespace Utilities
+  {
+    namespace MPI
+    {
+      std::pair<unsigned int, unsigned int>
+      lex_to_pair(const unsigned int rank,
+                  const unsigned int size1,
+                  const unsigned int size2)
+      {
+        AssertThrow(rank < size1 * size2, dealii::ExcMessage("Invalid rank."));
+        return {rank % size1, rank / size1};
+      }
+
+
+
+      MPI_Comm
+      create_row_comm(const MPI_Comm &   comm,
+                      const unsigned int size1,
+                      const unsigned int size2)
+      {
+        int size, rank;
+        MPI_Comm_size(comm, &size);
+        AssertThrow(static_cast<unsigned int>(size) == size1 * size2,
+                    dealii::ExcMessage("Invalid communicator size."));
+
+        MPI_Comm_rank(comm, &rank);
+
+        MPI_Comm row_comm;
+        MPI_Comm_split(comm,
+                       lex_to_pair(rank, size1, size2).second,
+                       rank,
+                       &row_comm);
+        return row_comm;
+      }
+
+
+
+      MPI_Comm
+      create_column_comm(const MPI_Comm &   comm,
+                         const unsigned int size1,
+                         const unsigned int size2)
+      {
+        int size, rank;
+        MPI_Comm_size(comm, &size);
+        AssertThrow(static_cast<unsigned int>(size) == size1 * size2,
+                    dealii::ExcMessage("Invalid communicator size."));
+
+        MPI_Comm_rank(comm, &rank);
+
+        MPI_Comm col_comm;
+        MPI_Comm_split(comm,
+                       lex_to_pair(rank, size1, size2).first,
+                       rank,
+                       &col_comm);
+        return col_comm;
+      }
+
+
+
+      MPI_Comm
+      create_rectangular_comm(const MPI_Comm &   comm,
+                              const unsigned int size_x,
+                              const unsigned int size_v)
+      {
+        int rank, size;
+        MPI_Comm_rank(comm, &rank);
+        MPI_Comm_size(comm, &size);
+
+        AssertThrow((size_x * size_v) <= static_cast<unsigned int>(size),
+                    dealii::ExcMessage("Not enough ranks."));
+
+        MPI_Comm sub_comm;
+        MPI_Comm_split(comm,
+                       (static_cast<unsigned int>(rank) < (size_x * size_v)),
+                       rank,
+                       &sub_comm);
+
+        if (static_cast<unsigned int>(rank) < (size_x * size_v))
+          return sub_comm;
+        else
+          {
+            MPI_Comm_free(&sub_comm);
+            return MPI_COMM_NULL;
+          }
+      }
+    } // namespace MPI
+  }   // namespace Utilities
 } // namespace dealii
 
 namespace TimeIntegrationSchemes
@@ -700,7 +791,7 @@ namespace TimeIntegrationSchemes
   class IRKStageParallel : public IRKBase
   {
   public:
-    using ReshapedVectorType = ReshapedVector<VectorType>;
+    using ReshapedVectorType = LinearAlgebra::ReshapedVector<VectorType>;
 
     IRKStageParallel(const MPI_Comm          comm_global,
                      const MPI_Comm          comm_row,
@@ -792,18 +883,18 @@ namespace TimeIntegrationSchemes
     template <typename VectorType>
     static void
     matrix_vector_rol_operation(
-      ReshapedVector<VectorType> &                            dst,
-      const ReshapedVector<VectorType> &                      src,
+      LinearAlgebra::ReshapedVector<VectorType> &      dst,
+      const LinearAlgebra::ReshapedVector<VectorType> &src,
       std::function<void(unsigned int,
                          unsigned int,
-                         ReshapedVector<VectorType> &,
-                         const ReshapedVector<VectorType> &)> fu)
+                         LinearAlgebra::ReshapedVector<VectorType> &,
+                         const LinearAlgebra::ReshapedVector<VectorType> &)> fu)
     {
       const auto         comm  = src.get_row_mpi_communicator();
       const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
       const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
 
-      ReshapedVector<VectorType> temp;
+      LinearAlgebra::ReshapedVector<VectorType> temp;
       temp.reinit(src, true);
       temp.copy_locally_owned_data_from(src);
 
@@ -830,8 +921,8 @@ namespace TimeIntegrationSchemes
 
     template <typename VectorType>
     static void
-    perform_basis_change(ReshapedVector<VectorType> &                      dst,
-                         const ReshapedVector<VectorType> &                src,
+    perform_basis_change(LinearAlgebra::ReshapedVector<VectorType> &       dst,
+                         const LinearAlgebra::ReshapedVector<VectorType> & src,
                          const FullMatrix<typename VectorType::value_type> T)
     {
       const auto fu =
@@ -1292,98 +1383,6 @@ namespace HeatEquation
     };
   };
 } // namespace HeatEquation
-
-
-namespace dealii
-{
-  namespace Utilities
-  {
-    namespace MPI
-    {
-      std::pair<unsigned int, unsigned int>
-      lex_to_pair(const unsigned int rank,
-                  const unsigned int size1,
-                  const unsigned int size2)
-      {
-        AssertThrow(rank < size1 * size2, dealii::ExcMessage("Invalid rank."));
-        return {rank % size1, rank / size1};
-      }
-
-
-
-      MPI_Comm
-      create_row_comm(const MPI_Comm &   comm,
-                      const unsigned int size1,
-                      const unsigned int size2)
-      {
-        int size, rank;
-        MPI_Comm_size(comm, &size);
-        AssertThrow(static_cast<unsigned int>(size) == size1 * size2,
-                    dealii::ExcMessage("Invalid communicator size."));
-
-        MPI_Comm_rank(comm, &rank);
-
-        MPI_Comm row_comm;
-        MPI_Comm_split(comm,
-                       lex_to_pair(rank, size1, size2).second,
-                       rank,
-                       &row_comm);
-        return row_comm;
-      }
-
-
-
-      MPI_Comm
-      create_column_comm(const MPI_Comm &   comm,
-                         const unsigned int size1,
-                         const unsigned int size2)
-      {
-        int size, rank;
-        MPI_Comm_size(comm, &size);
-        AssertThrow(static_cast<unsigned int>(size) == size1 * size2,
-                    dealii::ExcMessage("Invalid communicator size."));
-
-        MPI_Comm_rank(comm, &rank);
-
-        MPI_Comm col_comm;
-        MPI_Comm_split(comm,
-                       lex_to_pair(rank, size1, size2).first,
-                       rank,
-                       &col_comm);
-        return col_comm;
-      }
-
-
-
-      MPI_Comm
-      create_rectangular_comm(const MPI_Comm &   comm,
-                              const unsigned int size_x,
-                              const unsigned int size_v)
-      {
-        int rank, size;
-        MPI_Comm_rank(comm, &rank);
-        MPI_Comm_size(comm, &size);
-
-        AssertThrow((size_x * size_v) <= static_cast<unsigned int>(size),
-                    dealii::ExcMessage("Not enough ranks."));
-
-        MPI_Comm sub_comm;
-        MPI_Comm_split(comm,
-                       (static_cast<unsigned int>(rank) < (size_x * size_v)),
-                       rank,
-                       &sub_comm);
-
-        if (static_cast<unsigned int>(rank) < (size_x * size_v))
-          return sub_comm;
-        else
-          {
-            MPI_Comm_free(&sub_comm);
-            return MPI_COMM_NULL;
-          }
-      }
-    } // namespace MPI
-  }   // namespace Utilities
-} // namespace dealii
 
 
 
