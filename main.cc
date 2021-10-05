@@ -753,9 +753,9 @@ namespace TimeIntegrationSchemes
 
       // accumulate result in solution
       if (my_stage == 0)
-        solution += system_solution;
+        solution.add(time_step * b_vec[my_stage], system_solution);
       else
-        solution = system_solution;
+        solution.equ(time_step * b_vec[my_stage], system_solution);
 
       MPI_Allreduce(MPI_IN_PLACE,
                     solution.get_values(),
