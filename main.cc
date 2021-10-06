@@ -711,7 +711,7 @@ namespace TimeIntegrationSchemes
       pcout << "   " << solver_control.last_step()
             << " outer FGMRES iterations and "
             << preconditioner->get_n_iterations_and_clear()
-            << " outer FGMRES iterations." << std::endl;
+            << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
 
@@ -845,7 +845,7 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages; ++i)
           {
             SolverControl solver_control(n_max_iterations, abs_tolerance);
-            SolverFGMRES<VectorType> solver(solver_control);
+            SolverCG<VectorType> solver(solver_control);
 
             solver.solve(operators[i],
                          tmp_vectors.block(i),
@@ -1022,7 +1022,7 @@ namespace TimeIntegrationSchemes
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.min)
             << "/" << n_inner_iterations_min_max_avg.avg << "/"
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.max)
-            << " outer FGMRES iterations." << std::endl;
+            << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
 
@@ -1210,8 +1210,8 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        SolverControl solver_control(n_max_iterations, abs_tolerance);
-        SolverFGMRES<VectorType> solver(solver_control);
+        SolverControl        solver_control(n_max_iterations, abs_tolerance);
+        SolverCG<VectorType> solver(solver_control);
 
         solver.solve(linear_operator,
                      static_cast<VectorType &>(temp),
