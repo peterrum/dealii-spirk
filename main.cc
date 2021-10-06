@@ -596,6 +596,16 @@ namespace TimeIntegrationSchemes
 
       this->time_step = time_step;
 
+      if (system_matrix == nullptr)
+        {
+          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
+                                                               time_step,
+                                                               mass_matrix,
+                                                               laplace_matrix);
+          this->preconditioner = std::make_unique<Preconditioner>(
+            d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+        }
+
       BlockVectorType system_rhs(n_stages);      // TODO
       BlockVectorType system_solution(n_stages); //
       VectorType      tmp;                       //
@@ -640,18 +650,6 @@ namespace TimeIntegrationSchemes
 
       SolverFGMRES<BlockVectorType> cg(solver_control);
 
-      // ... create operator and preconditioner
-      if (system_matrix == nullptr)
-        {
-          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
-                                                               time_step,
-                                                               mass_matrix,
-                                                               laplace_matrix);
-          this->preconditioner = std::make_unique<Preconditioner>(
-            d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
-        }
-
-      // ... solve
       cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
 
       pcout << "   " << solver_control.last_step()
@@ -853,6 +851,17 @@ namespace TimeIntegrationSchemes
 
       this->time_step = time_step;
 
+      // ... create operator and preconditioner
+      if (system_matrix == nullptr)
+        {
+          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
+                                                               time_step,
+                                                               mass_matrix,
+                                                               laplace_matrix);
+          this->preconditioner = std::make_unique<Preconditioner>(
+            comm_row, d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+        }
+
       ReshapedVectorType system_rhs, system_solution;
       VectorType         tmp;
 
@@ -878,18 +887,6 @@ namespace TimeIntegrationSchemes
 
       SolverFGMRES<ReshapedVectorType> cg(solver_control);
 
-      // ... create operator and preconditioner
-      if (system_matrix == nullptr)
-        {
-          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
-                                                               time_step,
-                                                               mass_matrix,
-                                                               laplace_matrix);
-          this->preconditioner = std::make_unique<Preconditioner>(
-            comm_row, d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
-        }
-
-      // ... solve
       cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
 
       const double n_inner_iterations =
@@ -1153,7 +1150,8 @@ namespace HeatEquation
     Problem(const Parameters &params,
             const MPI_Comm    comm_global,
             const MPI_Comm    comm_row,
-            const MPI_Comm    comm_column)
+            const MPI_Comm    comm_column,
+            ConvergenceTable &table)
       : params(params)
       , comm_global(comm_global)
       , comm_row(comm_row)
@@ -1162,6 +1160,7 @@ namespace HeatEquation
       , fe(params.fe_degree)
       , quadrature(params.fe_degree + 1)
       , dof_handler(triangulation)
+      , table(table)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm_global) == 0)
     {}
 
@@ -1249,6 +1248,10 @@ namespace HeatEquation
             << "Number of degrees of freedom: " << dof_handler.n_dofs()
             << std::endl
             << std::endl;
+
+      table.add_value("n_levels", triangulation.n_global_levels());
+      table.add_value("n_cells", triangulation.n_global_active_cells());
+      table.add_value("n_dofs", dof_handler.n_dofs());
 
       constraints.clear();
       DoFTools::make_hanging_node_constraints(dof_handler, constraints);
@@ -1365,6 +1368,7 @@ namespace HeatEquation
     VectorType solution;
     VectorType system_rhs;
 
+    ConvergenceTable & table;
     ConditionalOStream pcout;
 
     class RightHandSide : public Function<dim>
@@ -1499,10 +1503,8 @@ main(int argc, char **argv)
                 Utilities::MPI::create_column_comm(comm_global, size_x, size_v);
 
 
-              HeatEquation::Problem<dim> heat_equation_solver(params,
-                                                              comm_global,
-                                                              comm_row,
-                                                              comm_column);
+              HeatEquation::Problem<dim> heat_equation_solver(
+                params, comm_global, comm_row, comm_column, table);
               heat_equation_solver.run();
 
               MPI_Comm_free(&comm_column);
