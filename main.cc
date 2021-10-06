@@ -337,6 +337,9 @@ namespace TimeIntegrationSchemes
           const unsigned int timestep_number,
           const double       time,
           const double       time_step) const = 0;
+
+    virtual void
+    get_statistics(ConvergenceTable &table) const = 0;
   };
 
 
@@ -415,6 +418,12 @@ namespace TimeIntegrationSchemes
             << std::endl;
     }
 
+    void
+    get_statistics(ConvergenceTable &table) const override
+    {
+      (void)table;
+    }
+
   private:
     class SystemMatrix
     {
@@ -491,6 +500,24 @@ namespace TimeIntegrationSchemes
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
 
+    void
+    get_statistics(ConvergenceTable &table) const override
+    {
+      table.add_value("time_rhs", time_rhs / 1e9);
+      table.set_scientific("time_rhs", true);
+      table.add_value("time_outer_solver", time_outer_solver / 1e9);
+      table.set_scientific("time_outer_solver", true);
+      table.add_value("time_solution_update", time_solution_update / 1e9);
+      table.set_scientific("time_solution_update", true);
+      table.add_value("time_system_vmult", time_system_vmult / 1e9);
+      table.set_scientific("time_system_vmult", true);
+      table.add_value("time_preconditioner_bc", time_preconditioner_bc / 1e9);
+      table.set_scientific("time_preconditioner_bc", true);
+      table.add_value("time_preconditioner_solver",
+                      time_preconditioner_solver / 1e9);
+      table.set_scientific("time_preconditioner_solver", true);
+    }
+
   private:
     static FullMatrix<typename VectorType::value_type>
     load_matrix_from_file(const unsigned int n_stages, const std::string label)
@@ -558,6 +585,13 @@ namespace TimeIntegrationSchemes
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
     ConditionalOStream pcout;
+
+    mutable double time_rhs                   = 0.0;
+    mutable double time_outer_solver          = 0.0;
+    mutable double time_solution_update       = 0.0;
+    mutable double time_system_vmult          = 0.0;
+    mutable double time_preconditioner_bc     = 0.0;
+    mutable double time_preconditioner_solver = 0.0;
   };
 
 
@@ -606,6 +640,8 @@ namespace TimeIntegrationSchemes
             d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
         }
 
+      const auto time_rhs = std::chrono::system_clock::now();
+
       BlockVectorType system_rhs(n_stages);      // TODO
       BlockVectorType system_solution(n_stages); //
       VectorType      tmp;                       //
@@ -643,6 +679,12 @@ namespace TimeIntegrationSchemes
           }
       }
 
+      this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::system_clock::now() - time_rhs)
+                          .count();
+
+      const auto time_outer_solver = std::chrono::system_clock::now();
+
       // solve system
       SolverControl solver_control(n_max_iterations,
                                    rel_tolerance *
@@ -652,14 +694,26 @@ namespace TimeIntegrationSchemes
 
       cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
 
+      this->time_outer_solver +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_outer_solver)
+          .count();
+
       pcout << "   " << solver_control.last_step()
             << " outer FGMRES iterations and "
             << preconditioner->get_n_iterations_and_clear()
             << " outer FGMRES iterations." << std::endl;
 
+      const auto time_solution_update = std::chrono::system_clock::now();
+
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
         solution.add(time_step * b_vec[i], system_solution.block(i));
+
+      this->time_solution_update +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_solution_update)
+          .count();
     }
 
   private:
@@ -854,13 +908,21 @@ namespace TimeIntegrationSchemes
       // ... create operator and preconditioner
       if (system_matrix == nullptr)
         {
-          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
-                                                               time_step,
-                                                               mass_matrix,
-                                                               laplace_matrix);
-          this->preconditioner = std::make_unique<Preconditioner>(
-            comm_row, d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+          this->system_matrix = std::make_unique<SystemMatrix>(
+            A_inv, time_step, mass_matrix, laplace_matrix, time_system_vmult);
+          this->preconditioner =
+            std::make_unique<Preconditioner>(comm_row,
+                                             d_vec,
+                                             T,
+                                             T_inv,
+                                             time_step,
+                                             mass_matrix,
+                                             laplace_matrix,
+                                             time_preconditioner_bc,
+                                             time_preconditioner_solver);
         }
+
+      const auto time_rhs = std::chrono::system_clock::now();
 
       ReshapedVectorType system_rhs, system_solution;
       VectorType         tmp;
@@ -880,6 +942,12 @@ namespace TimeIntegrationSchemes
       // ... perform basis change
       perform_basis_change(system_rhs, system_rhs, A_inv);
 
+      this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::system_clock::now() - time_rhs)
+                          .count();
+
+      const auto time_outer_solver = std::chrono::system_clock::now();
+
       // solve system
       SolverControl solver_control(n_max_iterations,
                                    rel_tolerance *
@@ -888,6 +956,11 @@ namespace TimeIntegrationSchemes
       SolverFGMRES<ReshapedVectorType> cg(solver_control);
 
       cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
+
+      this->time_outer_solver +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_outer_solver)
+          .count();
 
       const double n_inner_iterations =
         preconditioner->get_n_iterations_and_clear();
@@ -901,6 +974,8 @@ namespace TimeIntegrationSchemes
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.max)
             << " outer FGMRES iterations." << std::endl;
 
+      const auto time_solution_update = std::chrono::system_clock::now();
+
       // accumulate result in solution
       if (my_stage == 0)
         solution.add(time_step * b_vec[my_stage], system_solution);
@@ -913,6 +988,11 @@ namespace TimeIntegrationSchemes
                     MPI_DOUBLE,
                     MPI_SUM,
                     comm_row);
+
+      this->time_solution_update +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_solution_update)
+          .count();
     }
 
   private:
@@ -978,16 +1058,20 @@ namespace TimeIntegrationSchemes
       SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
-                   const SparseMatrixType &laplace_matrix)
+                   const SparseMatrixType &laplace_matrix,
+                   double &                time)
         : A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
+        , time(time)
       {}
 
       void
       vmult(ReshapedVectorType &dst, const ReshapedVectorType &src) const
       {
+        const auto time = std::chrono::system_clock::now();
+
         ReshapedVectorType temp;
         temp.reinit(src);
 
@@ -1007,6 +1091,10 @@ namespace TimeIntegrationSchemes
                               static_cast<const VectorType &>(src));
             dst.add(A_inv(i, j), temp);
           });
+
+        this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::system_clock::now() - time)
+                        .count();
       }
 
     private:
@@ -1014,6 +1102,8 @@ namespace TimeIntegrationSchemes
       const double                                       time_step;
       const SparseMatrixType &                           mass_matrix;
       const SparseMatrixType &                           laplace_matrix;
+
+      double &time;
     };
 
     class Preconditioner
@@ -1025,7 +1115,9 @@ namespace TimeIntegrationSchemes
                      const FullMatrix<typename VectorType::value_type> &T_inv,
                      const double            time_step,
                      const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix)
+                     const SparseMatrixType &laplace_matrix,
+                     double &                time_bc,
+                     double &                time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , d_vec(d_vec)
@@ -1034,6 +1126,8 @@ namespace TimeIntegrationSchemes
         , tau(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
+        , time_bc(time_bc)
+        , time_solver(time_solver)
         , n_iterations(0)
       {
         const auto my_stage = Utilities::MPI::this_mpi_process(comm_row);
@@ -1049,10 +1143,18 @@ namespace TimeIntegrationSchemes
       void
       vmult(ReshapedVectorType &dst, const ReshapedVectorType &src) const
       {
-        ReshapedVectorType temp; // TODO
-        temp.reinit(src);        //
+        const auto time_bc_0 = std::chrono::system_clock::now();
 
         perform_basis_change(dst, src, T_mat_inv);
+
+        this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::system_clock::now() - time_bc_0)
+                           .count();
+
+        const auto time_solver = std::chrono::system_clock::now();
+
+        ReshapedVectorType temp; // TODO
+        temp.reinit(src);        //
 
         SolverControl solver_control(n_max_iterations, abs_tolerance);
         SolverFGMRES<VectorType> solver(solver_control);
@@ -1064,7 +1166,18 @@ namespace TimeIntegrationSchemes
 
         n_iterations += solver_control.last_step();
 
+        this->time_solver +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now() - time_solver)
+            .count();
+
+        const auto time_bc_1 = std::chrono::system_clock::now();
+
         perform_basis_change(dst, temp, T_mat);
+
+        this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::system_clock::now() - time_bc_1)
+                           .count();
       }
 
       unsigned
@@ -1090,6 +1203,9 @@ namespace TimeIntegrationSchemes
 
       SparseMatrixType                  linear_operator;
       TrilinosWrappers::PreconditionAMG preconditioners;
+
+      double &time_bc;
+      double &time_solver;
 
       mutable unsigned int n_iterations;
     };
@@ -1233,6 +1349,8 @@ namespace HeatEquation
 
           output_results(time, timestep_number);
         }
+
+      time_integration_scheme->get_statistics(table);
     }
 
   private:
