@@ -494,7 +494,13 @@ namespace TimeIntegrationSchemes
     {
       FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
 
-      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
+      std::string file_name = label + std::to_string(n_stages) + ".txt";
+
+      std::ifstream fin(file_name);
+
+      AssertThrow(fin.fail() == false,
+                  ExcMessage("File with the name " + file_name +
+                             " could not be found!"));
 
       unsigned int m, n;
       fin >> m >> n;
@@ -514,7 +520,13 @@ namespace TimeIntegrationSchemes
     {
       Vector<typename VectorType::value_type> result(n_stages);
 
-      std::ifstream fin(label + std::to_string(n_stages) + ".txt");
+      std::string file_name = label + std::to_string(n_stages) + ".txt";
+
+      std::ifstream fin(file_name);
+
+      AssertThrow(fin.fail() == false,
+                  ExcMessage("File with the name " + file_name +
+                             " could not be found!"));
 
       unsigned int m, n;
       fin >> m >> n;
@@ -1134,10 +1146,9 @@ namespace HeatEquation
         rhs_function.set_time(time);
         VectorTools::create_right_hand_side(
           dof_handler, quadrature, rhs_function, tmp, constraints);
-        tmp.compress(VectorOperation::values::add); // TODO: should be done by
-        // deal.II
       };
 
+      // select time-integration scheme
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
 
@@ -1164,6 +1175,7 @@ namespace HeatEquation
       else
         Assert(false, ExcNotImplemented());
 
+      // perform time loop
       while (time <= params.end_time)
         {
           time += params.time_step_size;
