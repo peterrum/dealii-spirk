@@ -503,6 +503,8 @@ namespace TimeIntegrationSchemes
     void
     get_statistics(ConvergenceTable &table) const override
     {
+      table.add_value("time", time_total / 1e9);
+      table.set_scientific("time", true);
       table.add_value("time_rhs", time_rhs / 1e9);
       table.set_scientific("time_rhs", true);
       table.add_value("time_outer_solver", time_outer_solver / 1e9);
@@ -586,6 +588,7 @@ namespace TimeIntegrationSchemes
 
     ConditionalOStream pcout;
 
+    mutable double time_total                 = 0.0;
     mutable double time_rhs                   = 0.0;
     mutable double time_outer_solver          = 0.0;
     mutable double time_solution_update       = 0.0;
@@ -645,7 +648,8 @@ namespace TimeIntegrationSchemes
                                              time_preconditioner_solver);
         }
 
-      const auto time_rhs = std::chrono::system_clock::now();
+      const auto time_total = std::chrono::system_clock::now();
+      const auto time_rhs   = std::chrono::system_clock::now();
 
       BlockVectorType system_rhs(n_stages);      // TODO
       BlockVectorType system_solution(n_stages); //
@@ -719,6 +723,10 @@ namespace TimeIntegrationSchemes
         std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::system_clock::now() - time_solution_update)
           .count();
+
+      this->time_total += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::system_clock::now() - time_total)
+                            .count();
     }
 
   private:
@@ -963,7 +971,8 @@ namespace TimeIntegrationSchemes
                                              time_preconditioner_solver);
         }
 
-      const auto time_rhs = std::chrono::system_clock::now();
+      const auto time_total = std::chrono::system_clock::now();
+      const auto time_rhs   = std::chrono::system_clock::now();
 
       ReshapedVectorType system_rhs, system_solution;
       VectorType         tmp;
@@ -1034,6 +1043,10 @@ namespace TimeIntegrationSchemes
         std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::system_clock::now() - time_solution_update)
           .count();
+
+      this->time_total += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::system_clock::now() - time_total)
+                            .count();
     }
 
   private:
