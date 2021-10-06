@@ -14,6 +14,7 @@
  */
 
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/convergence_table.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/logstream.h>
 #include <deal.II/base/quadrature_lib.h>
@@ -1445,42 +1446,76 @@ main(int argc, char **argv)
 {
   try
     {
-      Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
-      HeatEquation::Parameters params;
+      constexpr unsigned int dim = 2;
 
-      if (argc == 2)
-        params.parse(std::string(argv[1]));
-
-      const unsigned int size_x =
-        params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
-      const unsigned int size_v =
-        Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) / size_x;
-
-      AssertThrow(size_v > 0,
-                  ExcMessage("Not enough ranks have been provided!"));
-
-      MPI_Comm comm_global =
-        Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD, size_x, size_v);
-
-      if (comm_global != MPI_COMM_NULL)
+      if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         {
-          MPI_Comm comm_row =
-            Utilities::MPI::create_row_comm(comm_global, size_x, size_v);
-          MPI_Comm comm_column =
-            Utilities::MPI::create_column_comm(comm_global, size_x, size_v);
-
-
-          HeatEquation::Problem<2> heat_equation_solver(params,
-                                                        comm_global,
-                                                        comm_row,
-                                                        comm_column);
-          heat_equation_solver.run();
-
-          MPI_Comm_free(&comm_column);
-          MPI_Comm_free(&comm_row);
-          MPI_Comm_free(&comm_global);
+#ifdef DEBUG
+          std::cout << "Running in debug mode!" << std::endl;
+#endif
         }
+
+      dealii::ConditionalOStream pcout(std::cout,
+                                       dealii::Utilities::MPI::this_mpi_process(
+                                         MPI_COMM_WORLD) == 0);
+
+      if (argc == 1)
+        {
+          if (pcout.is_active())
+            printf("ERROR: No .json parameter files has been provided!\n");
+
+          return 1;
+        }
+
+      ConvergenceTable table;
+
+      for (int i = 1; i < argc; ++i)
+        {
+          pcout << std::string(argv[i]) << std::endl;
+
+          HeatEquation::Parameters params;
+          params.parse(std::string(argv[i]));
+
+          const unsigned int size_x =
+            params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
+          const unsigned int size_v =
+            Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) / size_x;
+
+          AssertThrow(size_v > 0,
+                      ExcMessage("Not enough ranks have been provided!"));
+
+          MPI_Comm comm_global =
+            Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD,
+                                                    size_x,
+                                                    size_v);
+
+          if (comm_global != MPI_COMM_NULL)
+            {
+              MPI_Comm comm_row =
+                Utilities::MPI::create_row_comm(comm_global, size_x, size_v);
+              MPI_Comm comm_column =
+                Utilities::MPI::create_column_comm(comm_global, size_x, size_v);
+
+
+              HeatEquation::Problem<dim> heat_equation_solver(params,
+                                                              comm_global,
+                                                              comm_row,
+                                                              comm_column);
+              heat_equation_solver.run();
+
+              MPI_Comm_free(&comm_column);
+              MPI_Comm_free(&comm_row);
+              MPI_Comm_free(&comm_global);
+            }
+
+          if (pcout.is_active())
+            table.write_text(pcout.get_stream());
+        }
+
+      if (pcout.is_active())
+        table.write_text(pcout.get_stream());
     }
   catch (std::exception &exc)
     {
