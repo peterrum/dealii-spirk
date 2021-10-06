@@ -1,5 +1,9 @@
 { 
+    "FEDegree" : 4,
+    "NRefinements" : 5,
     "TimeIntegrationScheme" : "spirk", 
-    "IRKStages" : "3" 
+    "IRKStages" : "3",
+    "TimeStepSize" : "0.1",
+    "EndTime" : "0.5"
 }
 
