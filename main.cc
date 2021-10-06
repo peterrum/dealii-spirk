@@ -380,7 +380,7 @@ namespace TimeIntegrationSchemes
       // ... old solution
       mass_matrix.vmult(system_rhs, solution);
       laplace_matrix.vmult(tmp, solution);
-      system_rhs.add(-(1 - theta) * time_step, tmp);
+      system_rhs.add((1 - theta) * time_step, tmp);
 
       // ... rhs function (new)
       evaluate_rhs_function(time, tmp);
@@ -395,7 +395,7 @@ namespace TimeIntegrationSchemes
 
       // setup system matrix
       system_matrix.copy_from(mass_matrix);
-      system_matrix.add(theta * time_step, laplace_matrix);
+      system_matrix.add(-(theta * time_step), laplace_matrix);
 
       // solve system
       SolverControl        solver_control(1000, 1e-8 * system_rhs.l2_norm());
