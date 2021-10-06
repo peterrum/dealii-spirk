@@ -364,7 +364,7 @@ namespace TimeIntegrationSchemes
           const double       time,
           const double       time_step) const override
     {
-      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
+      (void)timestep_number;
 
       SparseMatrixType system_matrix;
       VectorType       system_rhs;
@@ -410,7 +410,7 @@ namespace TimeIntegrationSchemes
       // ... solve
       cg.solve(sm, solution, system_rhs, preconditioner);
 
-      pcout << "     " << solver_control.last_step() << " CG iterations."
+      pcout << "   " << solver_control.last_step() << " CG iterations."
             << std::endl;
     }
 
@@ -588,7 +588,7 @@ namespace TimeIntegrationSchemes
           const double       time,
           const double       time_step) const override
     {
-      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
+      (void)timestep_number;
 
       AssertThrow((this->time_step == 0 || this->time_step == time_step),
                   ExcNotImplemented());
@@ -653,8 +653,10 @@ namespace TimeIntegrationSchemes
       // ... solve
       cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
 
-      pcout << "     " << solver_control.last_step() << " CG iterations."
-            << std::endl;
+      pcout << "   " << solver_control.last_step()
+            << " outer FGMRES iterations and "
+            << preconditioner->get_n_iterations_and_clear()
+            << " outer FGMRES iterations." << std::endl;
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
@@ -724,6 +726,7 @@ namespace TimeIntegrationSchemes
         , tau(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
+        , n_iterations(0)
       {
         operators.resize(n_stages);
         preconditioners.resize(n_stages);
@@ -760,6 +763,8 @@ namespace TimeIntegrationSchemes
                          tmp_vectors.block(i),
                          dst.block(i),
                          preconditioners[i]);
+
+            n_iterations += solver_control.last_step();
           }
 
         dst = 0;
@@ -767,6 +772,14 @@ namespace TimeIntegrationSchemes
           for (unsigned int j = 0; j < n_stages; ++j)
             if (std::abs(T_mat(i, j)) > cut_off_tolerance)
               dst.block(i).add(T_mat(i, j), tmp_vectors.block(j));
+      }
+
+      unsigned
+      get_n_iterations_and_clear()
+      {
+        const unsigned int temp = n_iterations;
+        this->n_iterations      = 0;
+        return temp;
       }
 
     private:
@@ -786,6 +799,8 @@ namespace TimeIntegrationSchemes
 
       std::vector<SparseMatrixType>                  operators;
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
+
+      mutable unsigned int n_iterations;
     };
 
     const unsigned int n_max_iterations;
@@ -830,7 +845,7 @@ namespace TimeIntegrationSchemes
           const double       time,
           const double       time_step) const override
     {
-      pcout << "Time step " << timestep_number << " at t=" << time << std::endl;
+      (void)timestep_number;
 
       AssertThrow((this->time_step == 0 || this->time_step == time_step),
                   ExcNotImplemented());
@@ -876,8 +891,17 @@ namespace TimeIntegrationSchemes
       // ... solve
       cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
 
-      pcout << "     " << solver_control.last_step() << " CG iterations."
-            << std::endl;
+      const double n_inner_iterations =
+        preconditioner->get_n_iterations_and_clear();
+      const auto n_inner_iterations_min_max_avg =
+        Utilities::MPI::min_max_avg(n_inner_iterations, comm_row);
+
+      pcout << "   " << solver_control.last_step()
+            << " outer FGMRES iterations and "
+            << static_cast<unsigned int>(n_inner_iterations_min_max_avg.min)
+            << "/" << n_inner_iterations_min_max_avg.avg << "/"
+            << static_cast<unsigned int>(n_inner_iterations_min_max_avg.max)
+            << " outer FGMRES iterations." << std::endl;
 
       // accumulate result in solution
       if (my_stage == 0)
@@ -1012,6 +1036,7 @@ namespace TimeIntegrationSchemes
         , tau(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
+        , n_iterations(0)
       {
         const auto my_stage = Utilities::MPI::this_mpi_process(comm_row);
 
@@ -1039,7 +1064,17 @@ namespace TimeIntegrationSchemes
                      static_cast<const VectorType &>(dst),
                      preconditioners);
 
+        n_iterations += solver_control.last_step();
+
         perform_basis_change(dst, temp, T_mat);
+      }
+
+      unsigned
+      get_n_iterations_and_clear()
+      {
+        const unsigned int temp = this->n_iterations;
+        this->n_iterations      = 0;
+        return temp;
       }
 
     private:
@@ -1057,6 +1092,8 @@ namespace TimeIntegrationSchemes
 
       SparseMatrixType                  linear_operator;
       TrilinosWrappers::PreconditionAMG preconditioners;
+
+      mutable unsigned int n_iterations;
     };
 
     const MPI_Comm comm_row;
@@ -1180,6 +1217,10 @@ namespace HeatEquation
       // perform time loop
       while (time <= params.end_time)
         {
+          pcout << std::endl
+                << "Time step " << timestep_number << " at t=" << time
+                << std::endl;
+
           time += params.time_step_size;
           ++timestep_number;
 
@@ -1298,8 +1339,7 @@ namespace HeatEquation
           VectorTools::compute_global_error(triangulation,
                                             norm_per_cell,
                                             VectorTools::L2_norm);
-        pcout << "   Error in the L2 norm           :     " << error_norm
-              << std::endl;
+        pcout << "   Error in the L2 norm : " << error_norm << std::endl;
         solution.zero_out_ghost_values();
       }
     }
