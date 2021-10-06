@@ -632,12 +632,17 @@ namespace TimeIntegrationSchemes
 
       if (system_matrix == nullptr)
         {
-          this->system_matrix  = std::make_unique<SystemMatrix>(A_inv,
-                                                               time_step,
-                                                               mass_matrix,
-                                                               laplace_matrix);
-          this->preconditioner = std::make_unique<Preconditioner>(
-            d_vec, T, T_inv, time_step, mass_matrix, laplace_matrix);
+          this->system_matrix = std::make_unique<SystemMatrix>(
+            A_inv, time_step, mass_matrix, laplace_matrix, time_system_vmult);
+          this->preconditioner =
+            std::make_unique<Preconditioner>(d_vec,
+                                             T,
+                                             T_inv,
+                                             time_step,
+                                             mass_matrix,
+                                             laplace_matrix,
+                                             time_preconditioner_bc,
+                                             time_preconditioner_solver);
         }
 
       const auto time_rhs = std::chrono::system_clock::now();
@@ -723,17 +728,21 @@ namespace TimeIntegrationSchemes
       SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const SparseMatrixType &mass_matrix,
-                   const SparseMatrixType &laplace_matrix)
+                   const SparseMatrixType &laplace_matrix,
+                   double &                time)
         : n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
+        , time(time)
       {}
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
+        const auto time = std::chrono::system_clock::now();
+
         VectorType tmp;
         tmp.reinit(src.block(0));
 
@@ -750,6 +759,10 @@ namespace TimeIntegrationSchemes
                   dst.block(i).add(-time_step, tmp);
                 }
             }
+
+        this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::system_clock::now() - time)
+                        .count();
       }
 
     private:
@@ -758,6 +771,8 @@ namespace TimeIntegrationSchemes
       const double                                       time_step;
       const SparseMatrixType &                           mass_matrix;
       const SparseMatrixType &                           laplace_matrix;
+
+      double &time;
     };
 
     class Preconditioner
@@ -768,7 +783,9 @@ namespace TimeIntegrationSchemes
                      const FullMatrix<typename VectorType::value_type> &T_inv,
                      const double            time_step,
                      const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix)
+                     const SparseMatrixType &laplace_matrix,
+                     double &                time_bc,
+                     double &                time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , cut_off_tolerance(1e-12)
@@ -779,6 +796,8 @@ namespace TimeIntegrationSchemes
         , tau(time_step)
         , mass_matrix(mass_matrix)
         , laplace_matrix(laplace_matrix)
+        , time_bc(time_bc)
+        , time_solver(time_solver)
         , n_iterations(0)
       {
         operators.resize(n_stages);
@@ -798,14 +817,22 @@ namespace TimeIntegrationSchemes
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        BlockVectorType tmp_vectors; // TODO
-        tmp_vectors.reinit(src);     //
+        const auto time_bc_0 = std::chrono::system_clock::now();
 
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
             if (std::abs(T_mat_inv(i, j)) > cut_off_tolerance)
               dst.block(i).add(T_mat_inv(i, j), src.block(j));
+
+        this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::system_clock::now() - time_bc_0)
+                           .count();
+
+        const auto time_solver = std::chrono::system_clock::now();
+
+        BlockVectorType tmp_vectors; // TODO
+        tmp_vectors.reinit(src);     //
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
@@ -820,11 +847,22 @@ namespace TimeIntegrationSchemes
             n_iterations += solver_control.last_step();
           }
 
+        this->time_solver +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now() - time_solver)
+            .count();
+
+        const auto time_bc_1 = std::chrono::system_clock::now();
+
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
             if (std::abs(T_mat(i, j)) > cut_off_tolerance)
               dst.block(i).add(T_mat(i, j), tmp_vectors.block(j));
+
+        this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::system_clock::now() - time_bc_1)
+                           .count();
       }
 
       unsigned
@@ -852,6 +890,9 @@ namespace TimeIntegrationSchemes
 
       std::vector<SparseMatrixType>                  operators;
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
+
+      double &time_bc;
+      double &time_solver;
 
       mutable unsigned int n_iterations;
     };
