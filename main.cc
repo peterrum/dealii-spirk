@@ -1426,6 +1426,12 @@ namespace HeatEquation
       table.add_value("n_dofs", dof_handler.n_dofs());
 
       constraints.clear();
+
+      IndexSet locally_relevant_dofs;
+      DoFTools::extract_locally_relevant_dofs(dof_handler,
+                                                locally_relevant_dofs);
+      constraints.reinit(locally_relevant_dofs);
+
       DoFTools::make_hanging_node_constraints(dof_handler, constraints);
 
       // note: program is limited to homogenous DBCs
@@ -1486,6 +1492,8 @@ namespace HeatEquation
     void
     output_results(const double time, const unsigned int timestep_number) const
     {
+      if(false)
+      {
       DataOut<dim> data_out;
 
       data_out.attach_dof_handler(dof_handler);
@@ -1501,7 +1509,7 @@ namespace HeatEquation
                                           triangulation.get_communicator(),
                                           3,
                                           1);
-
+      }
       {
         solution.update_ghost_values();
         Vector<float> norm_per_cell(triangulation.n_active_cells());
@@ -1559,7 +1567,7 @@ namespace HeatEquation
       {
         (void)component;
 
-        AssertDimension(dim, 2);
+        //AssertDimension(dim, 2);
 
         const double x = p[0];
         const double y = p[1];
@@ -1596,7 +1604,7 @@ namespace HeatEquation
       {
         (void)component;
 
-        AssertDimension(dim, 2);
+       //AssertDimension(dim, 2);
 
         const double x = p[0];
         const double y = p[1];
@@ -1624,7 +1632,7 @@ main(int argc, char **argv)
     {
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
-      constexpr unsigned int dim = 2;
+      constexpr unsigned int dim = 3;
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         {
