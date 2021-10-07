@@ -1291,6 +1291,8 @@ namespace HeatEquation
 
     unsigned int irk_stages = 3;
 
+    bool do_output_paraview = false;
+
     void
     parse(const std::string file_name)
     {
@@ -1429,7 +1431,7 @@ namespace HeatEquation
 
       IndexSet locally_relevant_dofs;
       DoFTools::extract_locally_relevant_dofs(dof_handler,
-                                                locally_relevant_dofs);
+                                              locally_relevant_dofs);
       constraints.reinit(locally_relevant_dofs);
 
       DoFTools::make_hanging_node_constraints(dof_handler, constraints);
@@ -1492,40 +1494,42 @@ namespace HeatEquation
     void
     output_results(const double time, const unsigned int timestep_number) const
     {
-      if(false)
-      {
-      DataOut<dim> data_out;
+      if (params.do_output_paraview)
+        {
+          DataOut<dim> data_out;
 
-      data_out.attach_dof_handler(dof_handler);
-      data_out.add_data_vector(solution, "U");
+          data_out.attach_dof_handler(dof_handler);
+          data_out.add_data_vector(solution, "U");
 
-      data_out.build_patches();
+          data_out.build_patches();
 
-      data_out.set_flags(DataOutBase::VtkFlags(time, timestep_number));
+          data_out.set_flags(DataOutBase::VtkFlags(time, timestep_number));
 
-      data_out.write_vtu_with_pvtu_record("./",
-                                          "result",
-                                          timestep_number,
-                                          triangulation.get_communicator(),
-                                          3,
-                                          1);
-      }
-      {
-        solution.update_ghost_values();
-        Vector<float> norm_per_cell(triangulation.n_active_cells());
-        VectorTools::integrate_difference(dof_handler,
-                                          solution,
-                                          AnalyticalSolution(time),
-                                          norm_per_cell,
-                                          QGauss<dim>(fe.degree + 2),
-                                          VectorTools::L2_norm);
-        const double error_norm =
-          VectorTools::compute_global_error(triangulation,
+          data_out.write_vtu_with_pvtu_record("./",
+                                              "result",
+                                              timestep_number,
+                                              triangulation.get_communicator(),
+                                              3,
+                                              1);
+        }
+
+      if (true)
+        {
+          solution.update_ghost_values();
+          Vector<float> norm_per_cell(triangulation.n_active_cells());
+          VectorTools::integrate_difference(dof_handler,
+                                            solution,
+                                            AnalyticalSolution(time),
                                             norm_per_cell,
+                                            QGauss<dim>(fe.degree + 2),
                                             VectorTools::L2_norm);
-        pcout << "   Error in the L2 norm : " << error_norm << std::endl;
-        solution.zero_out_ghost_values();
-      }
+          const double error_norm =
+            VectorTools::compute_global_error(triangulation,
+                                              norm_per_cell,
+                                              VectorTools::L2_norm);
+          pcout << "   Error in the L2 norm : " << error_norm << std::endl;
+          solution.zero_out_ghost_values();
+        }
     }
 
     const Parameters &params;
@@ -1567,8 +1571,6 @@ namespace HeatEquation
       {
         (void)component;
 
-        //AssertDimension(dim, 2);
-
         const double x = p[0];
         const double y = p[1];
         const double t = this->get_time();
@@ -1603,8 +1605,6 @@ namespace HeatEquation
             const unsigned int component = 0) const override
       {
         (void)component;
-
-       //AssertDimension(dim, 2);
 
         const double x = p[0];
         const double y = p[1];
