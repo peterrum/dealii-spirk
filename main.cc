@@ -323,6 +323,101 @@ namespace dealii
 } // namespace dealii
 
 
+class MassLaplaceOperator
+{
+public:
+  MassLaplaceOperator(const SparseMatrixType &mass_matrix,
+                      const SparseMatrixType &laplace_matrix)
+    : mass_matrix(mass_matrix)
+    , laplace_matrix(laplace_matrix)
+    , mass_matrix_scaling(1.0)
+    , laplace_matrix_scaling(1.0)
+  {}
+
+  void
+  reinit(const double mass_matrix_scaling,
+         const double laplace_matrix_scaling) const
+  {
+    this->mass_matrix_scaling    = mass_matrix_scaling;
+    this->laplace_matrix_scaling = laplace_matrix_scaling;
+  }
+
+  void
+  vmult(VectorType &dst, const VectorType &src) const
+  {
+    this->vmult(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
+  }
+
+  void
+  vmult(VectorType &      dst,
+        const VectorType &src,
+        const double      mass_matrix_scaling,
+        const double      laplace_matrix_scaling) const
+  {
+    dst = 0.0; // TODO
+    this->vmult_add(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
+  }
+
+  void
+  vmult_add(VectorType &      dst,
+            const VectorType &src,
+            const double      mass_matrix_scaling,
+            const double      laplace_matrix_scaling) const
+  {
+    tmp.reinit(src, true);
+
+    if (mass_matrix_scaling == 0.0)
+      {
+        // nothing to do
+      }
+    else if (mass_matrix_scaling == 1.0)
+      {
+        mass_matrix.vmult_add(dst, src);
+      }
+    else
+      {
+        mass_matrix.vmult(tmp, src);
+        dst.add(mass_matrix_scaling, tmp);
+      }
+
+    if (laplace_matrix_scaling == 0.0)
+      {
+        // nothing to do
+      }
+    else if (laplace_matrix_scaling == 0.0)
+      {
+        laplace_matrix.vmult_add(dst, src);
+      }
+    else
+      {
+        laplace_matrix.vmult(tmp, src);
+        dst.add(laplace_matrix_scaling, tmp);
+      }
+  }
+
+  const SparseMatrixType &
+  get_system_matrix() const
+  {
+    tmp_matrix.copy_from(laplace_matrix);
+    tmp_matrix *= laplace_matrix_scaling;
+    tmp_matrix.add(mass_matrix_scaling, mass_matrix);
+
+    return tmp_matrix;
+  }
+
+
+private:
+  const SparseMatrixType &mass_matrix;
+  const SparseMatrixType &laplace_matrix;
+
+  mutable double mass_matrix_scaling;
+  mutable double laplace_matrix_scaling;
+
+  mutable VectorType       tmp;
+  mutable SparseMatrixType tmp_matrix;
+};
+
+
 
 namespace TimeIntegrationSchemes
 {
@@ -474,101 +569,6 @@ namespace TimeIntegrationSchemes
   };
 
 
-  class MassLaplaceOperator
-  {
-  public:
-    MassLaplaceOperator(const SparseMatrixType &mass_matrix,
-                        const SparseMatrixType &laplace_matrix)
-      : mass_matrix(mass_matrix)
-      , laplace_matrix(laplace_matrix)
-      , mass_matrix_scaling(1.0)
-      , laplace_matrix_scaling(1.0)
-    {}
-
-    void
-    reinit(const double mass_matrix_scaling,
-           const double laplace_matrix_scaling) const
-    {
-      this->mass_matrix_scaling    = mass_matrix_scaling;
-      this->laplace_matrix_scaling = laplace_matrix_scaling;
-    }
-
-    void
-    vmult(VectorType &dst, const VectorType &src) const
-    {
-      this->vmult(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
-    }
-
-    void
-    vmult(VectorType &      dst,
-          const VectorType &src,
-          const double      mass_matrix_scaling,
-          const double      laplace_matrix_scaling) const
-    {
-      dst = 0.0; // TODO
-      this->vmult_add(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
-    }
-
-    void
-    vmult_add(VectorType &      dst,
-              const VectorType &src,
-              const double      mass_matrix_scaling,
-              const double      laplace_matrix_scaling) const
-    {
-      tmp.reinit(src, true);
-
-      if (mass_matrix_scaling == 0.0)
-        {
-          // nothing to do
-        }
-      else if (mass_matrix_scaling == 1.0)
-        {
-          mass_matrix.vmult_add(dst, src);
-        }
-      else
-        {
-          mass_matrix.vmult(tmp, src);
-          dst.add(mass_matrix_scaling, tmp);
-        }
-
-      if (laplace_matrix_scaling == 0.0)
-        {
-          // nothing to do
-        }
-      else if (laplace_matrix_scaling == 0.0)
-        {
-          laplace_matrix.vmult_add(dst, src);
-        }
-      else
-        {
-          laplace_matrix.vmult(tmp, src);
-          dst.add(laplace_matrix_scaling, tmp);
-        }
-    }
-
-    const SparseMatrixType &
-    get_system_matrix() const
-    {
-      tmp_matrix.copy_from(laplace_matrix);
-      tmp_matrix *= laplace_matrix_scaling;
-      tmp_matrix.add(mass_matrix_scaling, mass_matrix);
-
-      return tmp_matrix;
-    }
-
-
-  private:
-    const SparseMatrixType &mass_matrix;
-    const SparseMatrixType &laplace_matrix;
-
-    mutable double mass_matrix_scaling;
-    mutable double laplace_matrix_scaling;
-
-    mutable VectorType       tmp;
-    mutable SparseMatrixType tmp_matrix;
-  };
-
-
 
   /**
    * IRK base class.
@@ -576,10 +576,9 @@ namespace TimeIntegrationSchemes
   class IRKBase : public Interface
   {
   public:
-    IRKBase(const MPI_Comm          comm,
-            const unsigned int      n_stages,
-            const SparseMatrixType &mass_matrix,
-            const SparseMatrixType &laplace_matrix,
+    IRKBase(const MPI_Comm             comm,
+            const unsigned int         n_stages,
+            const MassLaplaceOperator &op,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
       : n_stages(n_stages)
@@ -589,9 +588,7 @@ namespace TimeIntegrationSchemes
       , b_vec(load_vector_from_file(n_stages, "b_vec_"))
       , c_vec(load_vector_from_file(n_stages, "c_vec_"))
       , d_vec(load_vector_from_file(n_stages, "D_vec_"))
-      , mass_matrix(mass_matrix)
-      , laplace_matrix(laplace_matrix)
-      , op(mass_matrix, laplace_matrix)
+      , op(op)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -677,9 +674,7 @@ namespace TimeIntegrationSchemes
     const Vector<typename VectorType::value_type>     c_vec;
     const Vector<typename VectorType::value_type>     d_vec;
 
-    const SparseMatrixType &    mass_matrix;
-    const SparseMatrixType &    laplace_matrix;
-    mutable MassLaplaceOperator op;
+    const MassLaplaceOperator &op;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -702,17 +697,12 @@ namespace TimeIntegrationSchemes
   class IRK : public IRKBase
   {
   public:
-    IRK(const MPI_Comm          comm,
-        const unsigned int      n_stages,
-        const SparseMatrixType &mass_matrix,
-        const SparseMatrixType &laplace_matrix,
+    IRK(const MPI_Comm             comm,
+        const unsigned int         n_stages,
+        const MassLaplaceOperator &op,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : IRKBase(comm,
-                n_stages,
-                mass_matrix,
-                laplace_matrix,
-                evaluate_rhs_function)
+      : IRKBase(comm, n_stages, op, evaluate_rhs_function)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -1009,18 +999,13 @@ namespace TimeIntegrationSchemes
   public:
     using ReshapedVectorType = LinearAlgebra::ReshapedVector<VectorType>;
 
-    IRKStageParallel(const MPI_Comm          comm_global,
-                     const MPI_Comm          comm_row,
-                     const unsigned int      n_stages,
-                     const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix,
+    IRKStageParallel(const MPI_Comm             comm_global,
+                     const MPI_Comm             comm_row,
+                     const unsigned int         n_stages,
+                     const MassLaplaceOperator &op,
                      const std::function<void(const double, VectorType &)>
                        &evaluate_rhs_function)
-      : IRKBase(comm_global,
-                n_stages,
-                mass_matrix,
-                laplace_matrix,
-                evaluate_rhs_function)
+      : IRKBase(comm_global, n_stages, op, evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
@@ -1441,6 +1426,8 @@ namespace HeatEquation
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
 
+      MassLaplaceOperator mass_laplace_operator(mass_matrix, laplace_matrix);
+
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
@@ -1449,8 +1436,7 @@ namespace HeatEquation
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
                                                         params.irk_stages,
-                                                        mass_matrix,
-                                                        laplace_matrix,
+                                                        mass_laplace_operator,
                                                         evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
@@ -1458,8 +1444,7 @@ namespace HeatEquation
             comm_global,
             comm_row,
             params.irk_stages,
-            mass_matrix,
-            laplace_matrix,
+            mass_laplace_operator,
             evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
