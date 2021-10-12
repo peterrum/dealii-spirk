@@ -487,7 +487,7 @@ namespace TimeIntegrationSchemes
 
     void
     reinit(const double mass_matrix_scaling,
-           const double laplace_matrix_scaling)
+           const double laplace_matrix_scaling) const
     {
       this->mass_matrix_scaling    = mass_matrix_scaling;
       this->laplace_matrix_scaling = laplace_matrix_scaling;
@@ -561,8 +561,8 @@ namespace TimeIntegrationSchemes
     const SparseMatrixType &mass_matrix;
     const SparseMatrixType &laplace_matrix;
 
-    double mass_matrix_scaling;
-    double laplace_matrix_scaling;
+    mutable double mass_matrix_scaling;
+    mutable double laplace_matrix_scaling;
 
     mutable VectorType       tmp;
     mutable SparseMatrixType tmp_matrix;
@@ -591,6 +591,7 @@ namespace TimeIntegrationSchemes
       , d_vec(load_vector_from_file(n_stages, "D_vec_"))
       , mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
+      , op(mass_matrix, laplace_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -676,8 +677,9 @@ namespace TimeIntegrationSchemes
     const Vector<typename VectorType::value_type>     c_vec;
     const Vector<typename VectorType::value_type>     d_vec;
 
-    const SparseMatrixType &mass_matrix;
-    const SparseMatrixType &laplace_matrix;
+    const SparseMatrixType &    mass_matrix;
+    const SparseMatrixType &    laplace_matrix;
+    mutable MassLaplaceOperator op;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -731,14 +733,13 @@ namespace TimeIntegrationSchemes
       if (system_matrix == nullptr)
         {
           this->system_matrix = std::make_unique<SystemMatrix>(
-            A_inv, time_step, mass_matrix, laplace_matrix, time_system_vmult);
+            A_inv, time_step, op, time_system_vmult);
           this->preconditioner =
             std::make_unique<Preconditioner>(d_vec,
                                              T,
                                              T_inv,
                                              time_step,
-                                             mass_matrix,
-                                             laplace_matrix,
+                                             op,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -761,7 +762,7 @@ namespace TimeIntegrationSchemes
         evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
                               system_rhs.block(i));
 
-      laplace_matrix.vmult(tmp, solution);
+      op.vmult(tmp, solution, 0.0, 1.0);
 
       for (unsigned int i = 0; i < n_stages; ++i)
         system_rhs.block(i).add(1.0, tmp);
@@ -830,13 +831,12 @@ namespace TimeIntegrationSchemes
     public:
       SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
-                   const SparseMatrixType &mass_matrix,
-                   const SparseMatrixType &laplace_matrix,
-                   double &                time)
+                   const MassLaplaceOperator &                        op,
+                   double &                                           time)
         : n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
-        , op(mass_matrix, laplace_matrix)
+        , op(op)
         , time(time)
       {}
 
@@ -869,7 +869,7 @@ namespace TimeIntegrationSchemes
       const unsigned int                                 n_stages;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
-      const MassLaplaceOperator                          op;
+      const MassLaplaceOperator &                        op;
 
       double &time;
     };
@@ -880,11 +880,10 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double            time_step,
-                     const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix,
-                     double &                time_bc,
-                     double &                time_solver)
+                     const double               time_step,
+                     const MassLaplaceOperator &op,
+                     double &                   time_bc,
+                     double &                   time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , cut_off_tolerance(1e-12)
@@ -893,7 +892,7 @@ namespace TimeIntegrationSchemes
         , T_mat(T)
         , T_mat_inv(T_inv)
         , tau(time_step)
-        , op(mass_matrix, laplace_matrix)
+        , op(op)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
@@ -982,7 +981,7 @@ namespace TimeIntegrationSchemes
 
       const double tau;
 
-      mutable MassLaplaceOperator                    op;
+      const MassLaplaceOperator &                    op;
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
 
       double &time_bc;
