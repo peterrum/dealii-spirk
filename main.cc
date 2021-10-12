@@ -484,6 +484,16 @@ namespace TimeIntegrationSchemes
     {}
 
     void
+    vmult(VectorType &      dst,
+          const VectorType &src,
+          const double      mass_matrix_scaling,
+          const double      laplace_matrix_scaling) const
+    {
+      dst = 0.0; // TODO
+      this->vmult_add(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
+    }
+
+    void
     vmult_add(VectorType &      dst,
               const VectorType &src,
               const double      mass_matrix_scaling,
@@ -811,11 +821,13 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
             {
-              op.vmult_add(dst.block(i),
-                           src.block(j),
-                           A_inv(i, j),
-                           (i == j) ? (-time_step) : 0.0);
+              const unsigned int k = (j + i) % n_stages;
+              if (j == 0) // first process diagonal
+                op.vmult(dst.block(i), src.block(k), A_inv(i, k), -time_step);
+              else // proceed with off-diagonals
+                op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
             }
+
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::system_clock::now() - time)
