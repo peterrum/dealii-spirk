@@ -481,7 +481,23 @@ namespace TimeIntegrationSchemes
                         const SparseMatrixType &laplace_matrix)
       : mass_matrix(mass_matrix)
       , laplace_matrix(laplace_matrix)
+      , mass_matrix_scaling(1.0)
+      , laplace_matrix_scaling(1.0)
     {}
+
+    void
+    reinit(const double mass_matrix_scaling,
+           const double laplace_matrix_scaling)
+    {
+      this->mass_matrix_scaling    = mass_matrix_scaling;
+      this->laplace_matrix_scaling = laplace_matrix_scaling;
+    }
+
+    void
+    vmult(VectorType &dst, const VectorType &src) const
+    {
+      this->vmult(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
+    }
 
     void
     vmult(VectorType &      dst,
@@ -530,11 +546,26 @@ namespace TimeIntegrationSchemes
         }
     }
 
+    const SparseMatrixType &
+    get_system_matrix() const
+    {
+      tmp_matrix.copy_from(laplace_matrix);
+      tmp_matrix *= laplace_matrix_scaling;
+      tmp_matrix.add(mass_matrix_scaling, mass_matrix);
+
+      return tmp_matrix;
+    }
+
+
   private:
     const SparseMatrixType &mass_matrix;
     const SparseMatrixType &laplace_matrix;
 
-    mutable VectorType tmp;
+    double mass_matrix_scaling;
+    double laplace_matrix_scaling;
+
+    mutable VectorType       tmp;
+    mutable SparseMatrixType tmp_matrix;
   };
 
 
@@ -862,23 +893,19 @@ namespace TimeIntegrationSchemes
         , T_mat(T)
         , T_mat_inv(T_inv)
         , tau(time_step)
-        , mass_matrix(mass_matrix)
-        , laplace_matrix(laplace_matrix)
+        , op(mass_matrix, laplace_matrix)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
       {
-        operators.resize(n_stages);
         preconditioners.resize(n_stages);
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            operators[i].copy_from(laplace_matrix);
-            operators[i] *= -tau;
-            operators[i].add(d_vec[i], mass_matrix);
-
             TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-            preconditioners[i].initialize(operators[i], amg_data);
+
+            op.reinit(d_vec[i], -tau);
+            preconditioners[i].initialize(op.get_system_matrix(), amg_data);
           }
       }
 
@@ -907,7 +934,9 @@ namespace TimeIntegrationSchemes
             SolverControl solver_control(n_max_iterations, abs_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
-            solver.solve(operators[i],
+            op.reinit(d_vec[i], -tau);
+
+            solver.solve(op,
                          tmp_vectors.block(i),
                          dst.block(i),
                          preconditioners[i]);
@@ -953,10 +982,7 @@ namespace TimeIntegrationSchemes
 
       const double tau;
 
-      const SparseMatrixType &mass_matrix;
-      const SparseMatrixType &laplace_matrix;
-
-      std::vector<SparseMatrixType>                  operators;
+      mutable MassLaplaceOperator                    op;
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
 
       double &time_bc;
