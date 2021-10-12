@@ -445,14 +445,12 @@ namespace TimeIntegrationSchemes
   class OneStepTheta : public Interface
   {
   public:
-    OneStepTheta(const MPI_Comm          comm,
-                 const SparseMatrixType &mass_matrix,
-                 const SparseMatrixType &laplace_matrix,
+    OneStepTheta(const MPI_Comm             comm,
+                 const MassLaplaceOperator &system_matrix,
                  const std::function<void(const double, VectorType &)>
                    &evaluate_rhs_function)
       : theta(0.5)
-      , mass_matrix(mass_matrix)
-      , laplace_matrix(laplace_matrix)
+      , system_matrix(system_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -465,21 +463,17 @@ namespace TimeIntegrationSchemes
     {
       (void)timestep_number;
 
-      SparseMatrixType system_matrix;
-      VectorType       system_rhs;
-      VectorType       tmp;
-      VectorType       forcing_terms;
+      VectorType system_rhs;
+      VectorType tmp;
+      VectorType forcing_terms;
 
-      system_matrix.reinit(mass_matrix);
       system_rhs.reinit(solution);
       tmp.reinit(solution);
       forcing_terms.reinit(solution);
 
       // create right-hand-side vector
       // ... old solution
-      mass_matrix.vmult(system_rhs, solution);
-      laplace_matrix.vmult(tmp, solution);
-      system_rhs.add((1 - theta) * time_step, tmp);
+      system_matrix.vmult(system_rhs, solution, 1.0, (1 - theta) * time_step);
 
       // ... rhs function (new)
       evaluate_rhs_function(time, tmp);
@@ -493,8 +487,7 @@ namespace TimeIntegrationSchemes
       system_rhs += forcing_terms;
 
       // setup system matrix
-      system_matrix.copy_from(mass_matrix);
-      system_matrix.add(-(theta * time_step), laplace_matrix);
+      system_matrix.reinit(1.0, -(theta * time_step));
 
       // solve system
       SolverControl        solver_control(1000, 1e-8 * system_rhs.l2_norm());
@@ -523,7 +516,7 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const SparseMatrixType &system_matrix)
+      SystemMatrix(const MassLaplaceOperator &system_matrix)
         : system_matrix(system_matrix)
       {}
 
@@ -534,17 +527,18 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const SparseMatrixType &system_matrix;
+      const MassLaplaceOperator &system_matrix;
     };
 
     class Preconditioner
     {
     public:
-      Preconditioner(const SparseMatrixType &system_matrix)
+      Preconditioner(const MassLaplaceOperator &system_matrix)
         : system_matrix(system_matrix)
       {
         TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        precondition_amg.initialize(system_matrix, amg_data);
+        precondition_amg.initialize(system_matrix.get_system_matrix(),
+                                    amg_data);
       }
 
       void
@@ -554,14 +548,13 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const SparseMatrixType &          system_matrix;
+      const MassLaplaceOperator &       system_matrix;
       TrilinosWrappers::PreconditionAMG precondition_amg;
     };
 
     const double theta;
 
-    const SparseMatrixType &mass_matrix;
-    const SparseMatrixType &laplace_matrix;
+    const MassLaplaceOperator &system_matrix;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -1431,7 +1424,7 @@ namespace HeatEquation
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            comm_global, mass_matrix, laplace_matrix, evaluate_rhs_function);
+            comm_global, mass_laplace_operator, evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
