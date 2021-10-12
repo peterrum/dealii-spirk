@@ -474,6 +474,60 @@ namespace TimeIntegrationSchemes
   };
 
 
+  class MassLaplaceOperator
+  {
+  public:
+    MassLaplaceOperator(const SparseMatrixType &mass_matrix,
+                        const SparseMatrixType &laplace_matrix)
+      : mass_matrix(mass_matrix)
+      , laplace_matrix(laplace_matrix)
+    {}
+
+    void
+    vmult_add(VectorType &      dst,
+              const VectorType &src,
+              const double      mass_matrix_scaling,
+              const double      laplace_matrix_scaling) const
+    {
+      tmp.reinit(src, true);
+
+      if (mass_matrix_scaling == 0.0)
+        {
+          // nothing to do
+        }
+      else if (mass_matrix_scaling == 1.0)
+        {
+          mass_matrix.vmult_add(dst, src);
+        }
+      else
+        {
+          mass_matrix.vmult(tmp, src);
+          dst.add(mass_matrix_scaling, tmp);
+        }
+
+      if (laplace_matrix_scaling == 0.0)
+        {
+          // nothing to do
+        }
+      else if (laplace_matrix_scaling == 0.0)
+        {
+          laplace_matrix.vmult_add(dst, src);
+        }
+      else
+        {
+          laplace_matrix.vmult(tmp, src);
+          dst.add(laplace_matrix_scaling, tmp);
+        }
+    }
+
+  private:
+    const SparseMatrixType &mass_matrix;
+    const SparseMatrixType &laplace_matrix;
+
+    mutable VectorType tmp;
+  };
+
+
 
   /**
    * IRK base class.
@@ -741,8 +795,7 @@ namespace TimeIntegrationSchemes
         : n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
-        , mass_matrix(mass_matrix)
-        , laplace_matrix(laplace_matrix)
+        , op(mass_matrix, laplace_matrix)
         , time(time)
       {}
 
@@ -758,14 +811,10 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
             {
-              mass_matrix.vmult(tmp, src.block(j));
-              dst.block(i).add(A_inv(i, j), tmp);
-
-              if (i == j)
-                {
-                  laplace_matrix.vmult(tmp, src.block(j));
-                  dst.block(i).add(-time_step, tmp);
-                }
+              op.vmult_add(dst.block(i),
+                           src.block(j),
+                           A_inv(i, j),
+                           (i == j) ? (-time_step) : 0.0);
             }
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -777,8 +826,7 @@ namespace TimeIntegrationSchemes
       const unsigned int                                 n_stages;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
-      const SparseMatrixType &                           mass_matrix;
-      const SparseMatrixType &                           laplace_matrix;
+      const MassLaplaceOperator                          op;
 
       double &time;
     };
@@ -1632,7 +1680,7 @@ main(int argc, char **argv)
     {
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
-      constexpr unsigned int dim = 3;
+      constexpr unsigned int dim = 2;
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         {
