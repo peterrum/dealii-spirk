@@ -332,6 +332,9 @@ public:
          const double laplace_matrix_scaling) const = 0;
 
   virtual void
+  initialize_dof_vector(VectorType &vec) const = 0;
+
+  virtual void
   vmult(VectorType &dst, const VectorType &src) const = 0;
 
   virtual void
@@ -383,6 +386,15 @@ public:
                                          quadrature,
                                          laplace_matrix,
                                          constraints);
+
+    IndexSet locally_relevant_dofs;
+
+    DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
+
+    this->partitioner = std::make_shared<const Utilities::MPI::Partitioner>(
+      dof_handler.locally_owned_dofs(),
+      locally_relevant_dofs,
+      dof_handler.get_communicator());
   }
 
   void
@@ -391,6 +403,12 @@ public:
   {
     this->mass_matrix_scaling    = mass_matrix_scaling;
     this->laplace_matrix_scaling = laplace_matrix_scaling;
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    vec.reinit(partitioner);
   }
 
   void
@@ -458,8 +476,9 @@ public:
 
 
 private:
-  mutable SparseMatrixType mass_matrix;
-  mutable SparseMatrixType laplace_matrix;
+  mutable SparseMatrixType                                   mass_matrix;
+  mutable SparseMatrixType                                   laplace_matrix;
+  mutable std::shared_ptr<const Utilities::MPI::Partitioner> partitioner;
 
   mutable double mass_matrix_scaling;
   mutable double laplace_matrix_scaling;
@@ -1465,6 +1484,7 @@ namespace HeatEquation
 
       setup_system();
 
+      // select operator
       std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
 
       if (params.operator_type == "MatrixBased")
@@ -1483,15 +1503,9 @@ namespace HeatEquation
           AssertThrow(false, ExcNotImplemented());
         }
 
-      this->initialize_dof_vector(solution);
-      system_rhs.reinit(system_rhs);
-
-      double       time            = 0.0;
-      unsigned int timestep_number = 0;
-
-      VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
-
-      output_results(time, timestep_number);
+      // select time-integration scheme
+      std::unique_ptr<TimeIntegrationSchemes::Interface>
+        time_integration_scheme;
 
       const auto evaluate_rhs_function = [&](const double time,
                                              VectorType & tmp) -> void {
@@ -1500,10 +1514,6 @@ namespace HeatEquation
         VectorTools::create_right_hand_side(
           dof_handler, quadrature, rhs_function, tmp, constraints);
       };
-
-      // select time-integration scheme
-      std::unique_ptr<TimeIntegrationSchemes::Interface>
-        time_integration_scheme;
 
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
@@ -1525,6 +1535,16 @@ namespace HeatEquation
             evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
+
+      mass_laplace_operator->initialize_dof_vector(solution);
+      mass_laplace_operator->initialize_dof_vector(system_rhs);
+
+      double       time            = 0.0;
+      unsigned int timestep_number = 0;
+
+      VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
+
+      output_results(time, timestep_number);
 
       // perform time loop
       while (time <= params.end_time)
@@ -1579,33 +1599,6 @@ namespace HeatEquation
       // note: program is limited to homogenous DBCs
       DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
       constraints.close();
-    }
-
-    template <typename Number>
-    void
-    initialize_dof_vector(
-      LinearAlgebra::distributed::Vector<Number> &vec,
-      const unsigned int mg_level = numbers::invalid_unsigned_int)
-    {
-      IndexSet locally_relevant_dofs;
-
-      if (mg_level == numbers::invalid_unsigned_int)
-        DoFTools::extract_locally_relevant_dofs(dof_handler,
-                                                locally_relevant_dofs);
-      else
-        DoFTools::extract_locally_relevant_level_dofs(dof_handler,
-                                                      mg_level,
-                                                      locally_relevant_dofs);
-
-      const auto partitioner_dealii =
-        std::make_shared<const Utilities::MPI::Partitioner>(
-          mg_level == numbers::invalid_unsigned_int ?
-            dof_handler.locally_owned_dofs() :
-            dof_handler.locally_owned_mg_dofs(mg_level),
-          locally_relevant_dofs,
-          dof_handler.get_communicator());
-
-      vec.reinit(partitioner_dealii);
     }
 
     void
