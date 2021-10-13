@@ -2359,6 +2359,28 @@ main(int argc, char **argv)
               MPI_Comm comm_column = Utilities::MPI::create_column_comm(
                 comm_global, size_x, size_v, params.do_row_major);
 
+#ifdef DEBUG
+              auto ranks = Utilities::MPI::gather(
+                comm_global,
+                std::array<unsigned int, 3>{
+                  {Utilities::MPI::this_mpi_process(MPI_COMM_WORLD),
+                   Utilities::MPI::this_mpi_process(comm_row),
+                   Utilities::MPI::this_mpi_process(comm_column)
+
+                  }},
+                0);
+
+              std::sort(ranks.begin(), ranks.end(), [](auto &a, auto &b) {
+                if (a[1] != b[1])
+                  return a[1] < b[1];
+                return a[2] < b[2];
+              });
+
+              for (const auto &i : ranks)
+                std::cout << i[0] << " -> "
+                          << " (" << i[1] << "," << i[2] << ")" << std::endl;
+
+#endif
 
               HeatEquation::Problem<dim> heat_equation_solver(
                 params, comm_global, comm_row, comm_column, table);
