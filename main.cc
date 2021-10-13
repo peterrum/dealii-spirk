@@ -327,32 +327,54 @@ namespace dealii
 class MassLaplaceOperator
 {
 public:
-  virtual void
+  MassLaplaceOperator()
+    : mass_matrix_scaling(1.0)
+    , laplace_matrix_scaling(1.0)
+  {}
+
+  void
   reinit(const double mass_matrix_scaling,
-         const double laplace_matrix_scaling) const = 0;
+         const double laplace_matrix_scaling) const
+  {
+    this->mass_matrix_scaling    = mass_matrix_scaling;
+    this->laplace_matrix_scaling = laplace_matrix_scaling;
+  }
 
   virtual void
   initialize_dof_vector(VectorType &vec) const = 0;
 
   virtual void
-  vmult(VectorType &dst, const VectorType &src) const = 0;
-
-  virtual void
   vmult(VectorType &      dst,
         const VectorType &src,
         const double      mass_matrix_scaling,
-        const double      laplace_matrix_scaling) const = 0;
+        const double      laplace_matrix_scaling) const
+  {
+    this->reinit(mass_matrix_scaling, laplace_matrix_scaling);
+    this->vmult(dst, src);
+  }
 
   virtual void
+  vmult(VectorType &dst, const VectorType &src) const = 0;
+
+  void
   vmult_add(VectorType &      dst,
             const VectorType &src,
             const double      mass_matrix_scaling,
-            const double      laplace_matrix_scaling) const = 0;
+            const double      laplace_matrix_scaling) const
+  {
+    this->reinit(mass_matrix_scaling, laplace_matrix_scaling);
+    this->vmult_add(dst, src);
+  }
+
+  virtual void
+  vmult_add(VectorType &dst, const VectorType &src) const = 0;
 
   virtual const SparseMatrixType &
   get_system_matrix() const = 0;
 
-private:
+protected:
+  mutable double mass_matrix_scaling;
+  mutable double laplace_matrix_scaling;
 };
 
 
@@ -364,8 +386,6 @@ public:
   MassLaplaceOperatorMatrixBased(const DoFHandler<dim> &          dof_handler,
                                  const AffineConstraints<Number> &constraints,
                                  const Quadrature<dim> &          quadrature)
-    : mass_matrix_scaling(1.0)
-    , laplace_matrix_scaling(1.0)
   {
     TrilinosWrappers::SparsityPattern sparsity_pattern(
       dof_handler.locally_owned_dofs(), dof_handler.get_communicator());
@@ -397,13 +417,7 @@ public:
       dof_handler.get_communicator());
   }
 
-  void
-  reinit(const double mass_matrix_scaling,
-         const double laplace_matrix_scaling) const override
-  {
-    this->mass_matrix_scaling    = mass_matrix_scaling;
-    this->laplace_matrix_scaling = laplace_matrix_scaling;
-  }
+
 
   void
   initialize_dof_vector(VectorType &vec) const override
@@ -414,24 +428,12 @@ public:
   void
   vmult(VectorType &dst, const VectorType &src) const override
   {
-    this->vmult(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
-  }
-
-  void
-  vmult(VectorType &      dst,
-        const VectorType &src,
-        const double      mass_matrix_scaling,
-        const double      laplace_matrix_scaling) const override
-  {
     dst = 0.0; // TODO
-    this->vmult_add(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
+    this->vmult_add(dst, src);
   }
 
   void
-  vmult_add(VectorType &      dst,
-            const VectorType &src,
-            const double      mass_matrix_scaling,
-            const double      laplace_matrix_scaling) const override
+  vmult_add(VectorType &dst, const VectorType &src) const override
   {
     tmp.reinit(src, true);
 
@@ -479,9 +481,6 @@ private:
   mutable SparseMatrixType                                   mass_matrix;
   mutable SparseMatrixType                                   laplace_matrix;
   mutable std::shared_ptr<const Utilities::MPI::Partitioner> partitioner;
-
-  mutable double mass_matrix_scaling;
-  mutable double laplace_matrix_scaling;
 
   mutable VectorType       tmp;
   mutable SparseMatrixType tmp_matrix;
