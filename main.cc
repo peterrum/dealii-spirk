@@ -1172,11 +1172,13 @@ namespace TimeIntegrationSchemes
   public:
     IRKBase(const MPI_Comm                        comm,
             const unsigned int                    n_stages,
+            const bool                            do_reduce_number_of_vmults,
             const MassLaplaceOperator &           op,
             const PreconditionerBase<VectorType> &block_preconditioner,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
       : n_stages(n_stages)
+      , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
       , T(load_matrix_from_file(n_stages, "T"))
       , T_inv(load_matrix_from_file(n_stages, "T_inv"))
@@ -1262,7 +1264,8 @@ namespace TimeIntegrationSchemes
     }
 
   protected:
-    const unsigned int                                n_stages;
+    const unsigned int n_stages;
+    const bool         do_reduce_number_of_vmults;
     const FullMatrix<typename VectorType::value_type> A_inv;
     const FullMatrix<typename VectorType::value_type> T;
     const FullMatrix<typename VectorType::value_type> T_inv;
@@ -1296,11 +1299,17 @@ namespace TimeIntegrationSchemes
   public:
     IRK(const MPI_Comm                        comm,
         const unsigned int                    n_stages,
+        const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
         const PreconditionerBase<VectorType> &block_preconditioner,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : IRKBase(comm, n_stages, op, block_preconditioner, evaluate_rhs_function)
+      : IRKBase(comm,
+                n_stages,
+                do_reduce_number_of_vmults,
+                op,
+                block_preconditioner,
+                evaluate_rhs_function)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -1320,8 +1329,12 @@ namespace TimeIntegrationSchemes
 
       if (system_matrix == nullptr)
         {
-          this->system_matrix = std::make_unique<SystemMatrix>(
-            A_inv, time_step, op, time_system_vmult);
+          this->system_matrix =
+            std::make_unique<SystemMatrix>(do_reduce_number_of_vmults,
+                                           A_inv,
+                                           time_step,
+                                           op,
+                                           time_system_vmult);
           this->preconditioner =
             std::make_unique<Preconditioner>(d_vec,
                                              T,
@@ -1418,11 +1431,13 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
+      SystemMatrix(const bool do_reduce_number_of_vmults,
+                   const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const MassLaplaceOperator &                        op,
                    double &                                           time)
         : n_stages(A_inv.m())
+        , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
         , A_inv(A_inv)
         , time_step(time_step)
         , op(op)
@@ -1434,7 +1449,7 @@ namespace TimeIntegrationSchemes
       {
         const auto time = std::chrono::system_clock::now();
 
-        if (false)
+        if (do_reduce_number_of_vmults == false)
           {
             dst = 0;
             for (unsigned int i = 0; i < n_stages; ++i)
@@ -1473,7 +1488,8 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const unsigned int                                 n_stages;
+      const unsigned int n_stages;
+      const bool         do_reduce_number_of_vmults;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const MassLaplaceOperator &                        op;
@@ -1618,15 +1634,17 @@ namespace TimeIntegrationSchemes
   public:
     using ReshapedVectorType = LinearAlgebra::ReshapedVector<VectorType>;
 
-    IRKStageParallel(const MPI_Comm                        comm_global,
-                     const MPI_Comm                        comm_row,
-                     const unsigned int                    n_stages,
-                     const MassLaplaceOperator &           op,
+    IRKStageParallel(const MPI_Comm             comm_global,
+                     const MPI_Comm             comm_row,
+                     const unsigned int         n_stages,
+                     const bool                 do_reduce_number_of_vmults,
+                     const MassLaplaceOperator &op,
                      const PreconditionerBase<VectorType> &block_preconditioner,
                      const std::function<void(const double, VectorType &)>
                        &evaluate_rhs_function)
       : IRKBase(comm_global,
                 n_stages,
+                do_reduce_number_of_vmults,
                 op,
                 block_preconditioner,
                 evaluate_rhs_function)
@@ -1651,8 +1669,13 @@ namespace TimeIntegrationSchemes
       // ... create operator and preconditioner
       if (system_matrix == nullptr)
         {
-          this->system_matrix = std::make_unique<SystemMatrix>(
-            comm_row, A_inv, time_step, op, time_system_vmult);
+          this->system_matrix =
+            std::make_unique<SystemMatrix>(comm_row,
+                                           do_reduce_number_of_vmults,
+                                           A_inv,
+                                           time_step,
+                                           op,
+                                           time_system_vmult);
           this->preconditioner =
             std::make_unique<Preconditioner>(comm_row,
                                              d_vec,
@@ -1803,12 +1826,14 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const MPI_Comm &                                   comm_row,
+      SystemMatrix(const MPI_Comm &comm_row,
+                   const bool      do_reduce_number_of_vmults,
                    const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const MassLaplaceOperator &                        op,
                    double &                                           time)
         : my_stage(Utilities::MPI::this_mpi_process(comm_row))
+        , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
         , A_inv(A_inv)
         , time_step(time_step)
         , op(op)
@@ -1823,7 +1848,7 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp;
         temp.reinit(src);
 
-        if (false)
+        if (do_reduce_number_of_vmults == false)
           {
             matrix_vector_rol_operation<VectorType>(
               dst,
@@ -1868,7 +1893,8 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const unsigned int                                 my_stage;
+      const unsigned int my_stage;
+      const bool         do_reduce_number_of_vmults;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const MassLaplaceOperator &                        op;
@@ -2002,7 +2028,8 @@ namespace HeatEquation
     double      end_time                = 0.5;
     double      time_step_size          = 0.1;
 
-    unsigned int irk_stages = 3;
+    unsigned int irk_stages                 = 3;
+    bool         do_reduce_number_of_vmults = true;
 
     std::string operator_type             = "MatrixBased";
     std::string block_preconditioner_type = "AMG";
@@ -2185,18 +2212,20 @@ namespace HeatEquation
             *preconditioner,
             evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
-        time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
-                                                        params.irk_stages,
-                                                        *mass_laplace_operator,
-                                                        *preconditioner,
-                                                        evaluate_rhs_function);
+        time_integration_scheme = std::make_unique<TimeIntegrationSchemes::IRK>(
+          comm_global,
+          params.irk_stages,
+          params.do_reduce_number_of_vmults,
+          *mass_laplace_operator,
+          *preconditioner,
+          evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRKStageParallel>(
             comm_global,
             comm_row,
             params.irk_stages,
+            params.do_reduce_number_of_vmults,
             *mass_laplace_operator,
             *preconditioner,
             evaluate_rhs_function);
