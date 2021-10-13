@@ -2371,14 +2371,33 @@ main(int argc, char **argv)
                 0);
 
               std::sort(ranks.begin(), ranks.end(), [](auto &a, auto &b) {
-                if (a[1] != b[1])
-                  return a[1] < b[1];
-                return a[2] < b[2];
+                if (a[2] != b[2])
+                  return a[2] < b[2];
+                return a[1] < b[1];
               });
 
-              for (const auto &i : ranks)
-                std::cout << i[0] << " -> "
-                          << " (" << i[1] << "," << i[2] << ")" << std::endl;
+
+              const unsigned int needed_digits =
+                1 + Utilities::needed_digits(
+                      Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+
+              pcout << "Virtual topology:" << std::endl;
+              for (unsigned int i = 0, c = 0; i < size_v; ++i)
+                {
+                  if (i == 0)
+                    {
+                      pcout << std::setw(needed_digits) << " "
+                            << " ";
+                      for (unsigned int j = 0; j < size_x; ++j)
+                        pcout << std::setw(needed_digits) << j << " ";
+                      pcout << std::endl;
+                    }
+
+                  pcout << std::setw(needed_digits) << i << " ";
+                  for (unsigned int j = 0; j < size_x; ++j, ++c)
+                    pcout << std::setw(needed_digits) << ranks[c][0] << " ";
+                  pcout << std::endl;
+                }
 
 #endif
 
