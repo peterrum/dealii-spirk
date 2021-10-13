@@ -251,10 +251,15 @@ namespace dealii
       std::pair<unsigned int, unsigned int>
       lex_to_pair(const unsigned int rank,
                   const unsigned int size1,
-                  const unsigned int size2)
+                  const unsigned int size2,
+                  const bool         do_row_major)
       {
         AssertThrow(rank < size1 * size2, dealii::ExcMessage("Invalid rank."));
-        return {rank % size1, rank / size1};
+
+        if (do_row_major)
+          return {rank % size1, rank / size1};
+        else
+          return {rank / size2, rank % size2};
       }
 
 
@@ -262,7 +267,8 @@ namespace dealii
       MPI_Comm
       create_row_comm(const MPI_Comm &   comm,
                       const unsigned int size1,
-                      const unsigned int size2)
+                      const unsigned int size2,
+                      const bool         do_row_major)
       {
         int size, rank;
         MPI_Comm_size(comm, &size);
@@ -273,7 +279,7 @@ namespace dealii
 
         MPI_Comm row_comm;
         MPI_Comm_split(comm,
-                       lex_to_pair(rank, size1, size2).second,
+                       lex_to_pair(rank, size1, size2, do_row_major).second,
                        rank,
                        &row_comm);
         return row_comm;
@@ -284,7 +290,8 @@ namespace dealii
       MPI_Comm
       create_column_comm(const MPI_Comm &   comm,
                          const unsigned int size1,
-                         const unsigned int size2)
+                         const unsigned int size2,
+                         const bool         do_row_major)
       {
         int size, rank;
         MPI_Comm_size(comm, &size);
@@ -295,7 +302,7 @@ namespace dealii
 
         MPI_Comm col_comm;
         MPI_Comm_split(comm,
-                       lex_to_pair(rank, size1, size2).first,
+                       lex_to_pair(rank, size1, size2, do_row_major).first,
                        rank,
                        &col_comm);
         return col_comm;
@@ -1903,6 +1910,8 @@ namespace HeatEquation
     std::string operator_type             = "MatrixBased";
     std::string block_preconditioner_type = "AMG";
 
+    bool do_row_major = true;
+
     bool do_output_paraview = false;
 
     void
@@ -1927,6 +1936,8 @@ namespace HeatEquation
                         block_preconditioner_type,
                         "",
                         Patterns::Selection("AMG|GMG"));
+
+      prm.add_parameter("DoRowMajor", do_row_major);
 
       prm.add_parameter("DoOutputParaview", do_output_paraview);
 
@@ -2343,10 +2354,10 @@ main(int argc, char **argv)
 
           if (comm_global != MPI_COMM_NULL)
             {
-              MPI_Comm comm_row =
-                Utilities::MPI::create_row_comm(comm_global, size_x, size_v);
-              MPI_Comm comm_column =
-                Utilities::MPI::create_column_comm(comm_global, size_x, size_v);
+              MPI_Comm comm_row = Utilities::MPI::create_row_comm(
+                comm_global, size_x, size_v, params.do_row_major);
+              MPI_Comm comm_column = Utilities::MPI::create_column_comm(
+                comm_global, size_x, size_v, params.do_row_major);
 
 
               HeatEquation::Problem<dim> heat_equation_solver(
