@@ -17,6 +17,7 @@
 #include <deal.II/base/convergence_table.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/logstream.h>
+#include <deal.II/base/mpi.templates.h>
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/utilities.h>
 
@@ -251,10 +252,15 @@ namespace dealii
       std::pair<unsigned int, unsigned int>
       lex_to_pair(const unsigned int rank,
                   const unsigned int size1,
-                  const unsigned int size2)
+                  const unsigned int size2,
+                  const bool         do_row_major)
       {
         AssertThrow(rank < size1 * size2, dealii::ExcMessage("Invalid rank."));
-        return {rank % size1, rank / size1};
+
+        if (do_row_major)
+          return {rank % size1, rank / size1};
+        else
+          return {rank / size2, rank % size2};
       }
 
 
@@ -262,7 +268,8 @@ namespace dealii
       MPI_Comm
       create_row_comm(const MPI_Comm &   comm,
                       const unsigned int size1,
-                      const unsigned int size2)
+                      const unsigned int size2,
+                      const bool         do_row_major)
       {
         int size, rank;
         MPI_Comm_size(comm, &size);
@@ -273,7 +280,7 @@ namespace dealii
 
         MPI_Comm row_comm;
         MPI_Comm_split(comm,
-                       lex_to_pair(rank, size1, size2).second,
+                       lex_to_pair(rank, size1, size2, do_row_major).second,
                        rank,
                        &row_comm);
         return row_comm;
@@ -284,7 +291,8 @@ namespace dealii
       MPI_Comm
       create_column_comm(const MPI_Comm &   comm,
                          const unsigned int size1,
-                         const unsigned int size2)
+                         const unsigned int size2,
+                         const bool         do_row_major)
       {
         int size, rank;
         MPI_Comm_size(comm, &size);
@@ -295,7 +303,7 @@ namespace dealii
 
         MPI_Comm col_comm;
         MPI_Comm_split(comm,
-                       lex_to_pair(rank, size1, size2).first,
+                       lex_to_pair(rank, size1, size2, do_row_major).first,
                        rank,
                        &col_comm);
         return col_comm;
@@ -306,22 +314,37 @@ namespace dealii
       MPI_Comm
       create_rectangular_comm(const MPI_Comm &   comm,
                               const unsigned int size_x,
-                              const unsigned int size_v)
+                              const unsigned int padding_x)
       {
         int rank, size;
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_size(comm, &size);
 
-        AssertThrow((size_x * size_v) <= static_cast<unsigned int>(size),
-                    dealii::ExcMessage("Not enough ranks."));
+        const unsigned int type_1 =
+          (rank % padding_x) < ((padding_x / size_x) * size_x);
+
+        const unsigned int n_ranks = Utilities::MPI::sum(type_1, comm);
+
+        unsigned int offset = 0;
+
+        const int ierr =
+          MPI_Exscan(&type_1,
+                     &offset,
+                     1,
+                     Utilities::MPI::internal::mpi_type_id(&offset),
+                     MPI_SUM,
+                     comm);
+
+        AssertThrowMPI(ierr);
+
+        const unsigned int type_2 = (offset < ((n_ranks / size_x) * size_x));
+
+        const unsigned int color = type_1 > 0 && type_2;
 
         MPI_Comm sub_comm;
-        MPI_Comm_split(comm,
-                       (static_cast<unsigned int>(rank) < (size_x * size_v)),
-                       rank,
-                       &sub_comm);
+        MPI_Comm_split(comm, color, rank, &sub_comm);
 
-        if (static_cast<unsigned int>(rank) < (size_x * size_v))
+        if (color == 1)
           return sub_comm;
         else
           {
@@ -329,6 +352,44 @@ namespace dealii
             return MPI_COMM_NULL;
           }
       }
+
+
+
+      MPI_Comm
+      create_sm(const MPI_Comm &comm)
+      {
+        int rank;
+        MPI_Comm_rank(comm, &rank);
+
+        MPI_Comm comm_shared;
+        MPI_Comm_split_type(
+          comm, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &comm_shared);
+
+        return comm_shared;
+      }
+
+
+
+      unsigned int
+      n_procs_of_sm(const MPI_Comm &comm)
+      {
+        MPI_Comm comm_sm = create_sm(comm);
+
+        // determine size of current shared memory communicator
+        int size_shared;
+        MPI_Comm_size(comm_sm, &size_shared);
+
+        MPI_Comm_free(&comm_sm);
+
+        // determine maximum, since some shared memory communicators might not
+        // be filed completely
+        int size_shared_max;
+        MPI_Allreduce(
+          &size_shared, &size_shared_max, 1, MPI_INT, MPI_MAX, comm);
+
+        return size_shared_max;
+      }
+
     } // namespace MPI
   }   // namespace Utilities
 } // namespace dealii
@@ -1903,6 +1964,10 @@ namespace HeatEquation
     std::string operator_type             = "MatrixBased";
     std::string block_preconditioner_type = "AMG";
 
+    bool do_row_major = true;
+    int  padding      = -1; // -1: no padding; 0: use sm;
+                            // else valid: padding > irk_stages
+
     bool do_output_paraview = false;
 
     void
@@ -1927,6 +1992,9 @@ namespace HeatEquation
                         block_preconditioner_type,
                         "",
                         Patterns::Selection("AMG|GMG"));
+
+      prm.add_parameter("DoRowMajor", do_row_major);
+      prm.add_parameter("Padding", padding);
 
       prm.add_parameter("DoOutputParaview", do_output_paraview);
 
@@ -2330,24 +2398,83 @@ main(int argc, char **argv)
 
           const unsigned int size_x =
             params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
-          const unsigned int size_v =
-            Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD) / size_x;
 
-          AssertThrow(size_v > 0,
+          AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD),
                       ExcMessage("Not enough ranks have been provided!"));
+
+          AssertThrow(
+            (params.do_row_major == true) || (params.padding == -1),
+            ExcMessage(
+              "Padding can only be turned if row-major ordering is enabled."));
+          AssertThrow(
+            (params.do_row_major == false) || (params.padding <= 0) ||
+              size_x <= static_cast<unsigned int>(params.padding),
+            ExcMessage(
+              "Padding has to be at least as large as the number of stages."));
+
+          const unsigned int padding =
+            (params.padding == -1) ?
+              size_x :
+              ((params.padding == 0) ?
+                 Utilities::MPI::n_procs_of_sm(MPI_COMM_WORLD) :
+                 params.padding);
 
           MPI_Comm comm_global =
             Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD,
                                                     size_x,
-                                                    size_v);
+                                                    padding);
+
+          const unsigned int size_v =
+            Utilities::MPI::n_mpi_processes(comm_global) / size_x;
 
           if (comm_global != MPI_COMM_NULL)
             {
-              MPI_Comm comm_row =
-                Utilities::MPI::create_row_comm(comm_global, size_x, size_v);
-              MPI_Comm comm_column =
-                Utilities::MPI::create_column_comm(comm_global, size_x, size_v);
+              MPI_Comm comm_row = Utilities::MPI::create_row_comm(
+                comm_global, size_x, size_v, params.do_row_major);
+              MPI_Comm comm_column = Utilities::MPI::create_column_comm(
+                comm_global, size_x, size_v, params.do_row_major);
 
+#ifdef DEBUG
+              auto ranks = Utilities::MPI::gather(
+                comm_global,
+                std::array<unsigned int, 3>{
+                  {Utilities::MPI::this_mpi_process(MPI_COMM_WORLD),
+                   Utilities::MPI::this_mpi_process(comm_row),
+                   Utilities::MPI::this_mpi_process(comm_column)
+
+                  }},
+                0);
+
+              std::sort(ranks.begin(), ranks.end(), [](auto &a, auto &b) {
+                if (a[2] != b[2])
+                  return a[2] < b[2];
+                return a[1] < b[1];
+              });
+
+
+              const unsigned int needed_digits =
+                1 + Utilities::needed_digits(
+                      Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+
+              pcout << "Virtual topology:" << std::endl;
+              for (unsigned int i = 0, c = 0; i < size_v; ++i)
+                {
+                  if (i == 0)
+                    {
+                      pcout << std::setw(needed_digits) << " "
+                            << " ";
+                      for (unsigned int j = 0; j < size_x; ++j)
+                        pcout << std::setw(needed_digits) << j << " ";
+                      pcout << std::endl;
+                    }
+
+                  pcout << std::setw(needed_digits) << i << " ";
+                  for (unsigned int j = 0; j < size_x; ++j, ++c)
+                    pcout << std::setw(needed_digits) << ranks[c][0] << " ";
+                  pcout << std::endl;
+                }
+
+#endif
 
               HeatEquation::Problem<dim> heat_equation_solver(
                 params, comm_global, comm_row, comm_column, table);
