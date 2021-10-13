@@ -51,6 +51,7 @@
 
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
+#include <deal.II/matrix_free/tools.h>
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
@@ -497,9 +498,12 @@ public:
                                 const AffineConstraints<Number> &constraints,
                                 const Quadrature<dim> &          quadrature)
   {
-    (void)dof_handler;
-    (void)constraints;
-    (void)quadrature;
+    this->constraints = &constraints;
+
+    typename MatrixFree<dim, Number>::AdditionalData data;
+    data.mapping_update_flags = update_values | update_gradients;
+    matrix_free.reinit(
+      MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
   }
 
   void
@@ -511,28 +515,134 @@ public:
   void
   vmult(VectorType &dst, const VectorType &src) const override
   {
-    (void)dst;
-    (void)src;
+    this->matrix_free.cell_loop(
+      &MassLaplaceOperatorMatrixFree::do_cell_integral_range,
+      this,
+      dst,
+      src,
+      true);
   }
 
   void
   vmult_add(VectorType &dst, const VectorType &src) const override
   {
-    (void)dst;
-    (void)src;
+    this->matrix_free.cell_loop(
+      &MassLaplaceOperatorMatrixFree::do_cell_integral_range,
+      this,
+      dst,
+      src,
+      false);
   }
 
   const SparseMatrixType &
   get_system_matrix() const override
   {
-    return tmp_matrix;
+    if (system_matrix.m() == 0 && system_matrix.n() == 0)
+      {
+        const auto &dof_handler = this->matrix_free.get_dof_handler();
+        TrilinosWrappers::SparsityPattern dsp(
+          dof_handler.locally_owned_dofs(),
+          dof_handler.get_triangulation().get_communicator());
+        DoFTools::make_sparsity_pattern(dof_handler, dsp, *constraints);
+        dsp.compress();
+        system_matrix.reinit(dsp);
+      }
+
+    system_matrix = 0.0;
+
+    MatrixFreeTools::compute_matrix(
+      matrix_free,
+      *constraints,
+      system_matrix,
+      &MassLaplaceOperatorMatrixFree::do_cell_integral,
+      this);
+
+    return system_matrix;
   }
 
 
 private:
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+  void
+  do_cell_integral_range(
+    const MatrixFree<dim, Number> &              matrix_free,
+    VectorType &                                 dst,
+    const VectorType &                           src,
+    const std::pair<unsigned int, unsigned int> &range) const
+  {
+    FECellIntegrator integrator(matrix_free, range);
+    for (unsigned cell = range.first; cell < range.second; ++cell)
+      {
+        integrator.reinit(cell);
+
+        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+          integrator.gather_evaluate(src,
+                                     EvaluationFlags::values |
+                                       EvaluationFlags::gradients);
+        else if (mass_matrix_scaling != 0.0)
+          integrator.gather_evaluate(src, EvaluationFlags::values);
+        else if (laplace_matrix_scaling != 0.0)
+          integrator.gather_evaluate(src, EvaluationFlags::gradients);
+
+        for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+          {
+            if (mass_matrix_scaling != 0.0)
+              integrator.submit_value(mass_matrix_scaling *
+                                        integrator.get_value(q),
+                                      q);
+            if (laplace_matrix_scaling != 0.0)
+              integrator.submit_gradient(laplace_matrix_scaling *
+                                           integrator.get_gradient(q),
+                                         q);
+          }
+
+        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+          integrator.integrate_scatter(EvaluationFlags::values |
+                                         EvaluationFlags::gradients,
+                                       dst);
+        else if (mass_matrix_scaling != 0.0)
+          integrator.integrate_scatter(EvaluationFlags::values, dst);
+        else if (laplace_matrix_scaling != 0.0)
+          integrator.integrate_scatter(EvaluationFlags::gradients, dst);
+      }
+  }
+
+  void
+  do_cell_integral(FECellIntegrator &integrator) const
+  {
+    if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+    else if (mass_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::values);
+    else if (laplace_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::gradients);
+
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        if (mass_matrix_scaling != 0.0)
+          integrator.submit_value(mass_matrix_scaling * integrator.get_value(q),
+                                  q);
+        if (laplace_matrix_scaling != 0.0)
+          integrator.submit_gradient(laplace_matrix_scaling *
+                                       integrator.get_gradient(q),
+                                     q);
+      }
+
+    if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::values |
+                           EvaluationFlags::gradients);
+    else if (mass_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::values);
+    else if (laplace_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::gradients);
+  }
+
+  SmartPointer<const AffineConstraints<Number>> constraints;
+
   MatrixFree<dim, Number> matrix_free;
 
-  mutable SparseMatrixType tmp_matrix;
+  mutable SparseMatrixType system_matrix;
 };
 
 
