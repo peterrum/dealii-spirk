@@ -548,8 +548,6 @@ public:
         system_matrix.reinit(dsp);
       }
 
-    system_matrix = 0.0;
-
     MatrixFreeTools::compute_matrix(
       matrix_free,
       *constraints,
@@ -647,6 +645,71 @@ private:
 
 
 
+template <typename VectorType>
+class PreconditionerBase
+{
+public:
+  virtual void
+  reinit() const = 0;
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const = 0;
+
+  virtual std::unique_ptr<const PreconditionerBase<VectorType>>
+  clone() const = 0;
+
+
+private:
+};
+
+
+
+template <typename VectorType>
+class PreconditionerAMG : public PreconditionerBase<VectorType>
+{
+public:
+  PreconditionerAMG(
+    const MassLaplaceOperator &op,
+    const typename TrilinosWrappers::PreconditionAMG::AdditionalData
+      additional_data =
+        typename TrilinosWrappers::PreconditionAMG::AdditionalData())
+    : op(op)
+    , additional_data(additional_data)
+  {}
+
+  ~PreconditionerAMG()
+  {}
+
+  virtual void
+  reinit() const override
+  {
+    amg.initialize(op.get_system_matrix(), additional_data);
+  }
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    amg.vmult(dst, src);
+  }
+
+  virtual std::unique_ptr<const PreconditionerBase<VectorType>>
+  clone() const override
+  {
+    return std::make_unique<PreconditionerAMG<VectorType>>(
+      this->op, this->additional_data);
+  }
+
+private:
+  const MassLaplaceOperator &op;
+
+  const typename TrilinosWrappers::PreconditionAMG::AdditionalData
+    additional_data;
+
+  mutable TrilinosWrappers::PreconditionAMG amg;
+};
+
+
+
 namespace TimeIntegrationSchemes
 {
   /**
@@ -673,12 +736,14 @@ namespace TimeIntegrationSchemes
   class OneStepTheta : public Interface
   {
   public:
-    OneStepTheta(const MPI_Comm             comm,
-                 const MassLaplaceOperator &system_matrix,
+    OneStepTheta(const MPI_Comm                        comm,
+                 const MassLaplaceOperator &           system_matrix,
+                 const PreconditionerBase<VectorType> &block_preconditioner,
                  const std::function<void(const double, VectorType &)>
                    &evaluate_rhs_function)
       : theta(0.5)
       , system_matrix(system_matrix)
+      , block_preconditioner(block_preconditioner)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -725,7 +790,7 @@ namespace TimeIntegrationSchemes
       SystemMatrix sm(system_matrix);
 
       // ... create preconditioner
-      Preconditioner preconditioner(system_matrix);
+      Preconditioner preconditioner(system_matrix, block_preconditioner);
 
       // ... solve
       cg.solve(sm, solution, system_rhs, preconditioner);
@@ -761,28 +826,29 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(const MassLaplaceOperator &system_matrix)
+      Preconditioner(const MassLaplaceOperator &           system_matrix,
+                     const PreconditionerBase<VectorType> &precondition)
         : system_matrix(system_matrix)
+        , precondition(precondition)
       {
-        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        precondition_amg.initialize(system_matrix.get_system_matrix(),
-                                    amg_data);
+        precondition.reinit();
       }
 
       void
       vmult(VectorType &dst, const VectorType &src) const
       {
-        precondition_amg.vmult(dst, src);
+        precondition.vmult(dst, src);
       }
 
     private:
-      const MassLaplaceOperator &       system_matrix;
-      TrilinosWrappers::PreconditionAMG precondition_amg;
+      const MassLaplaceOperator &           system_matrix;
+      const PreconditionerBase<VectorType> &precondition;
     };
 
     const double theta;
 
-    const MassLaplaceOperator &system_matrix;
+    const MassLaplaceOperator &           system_matrix;
+    const PreconditionerBase<VectorType> &block_preconditioner;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -1657,6 +1723,19 @@ namespace HeatEquation
       else
         AssertThrow(false, ExcNotImplemented());
 
+      // select preconditioner
+      std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
+
+      if (params.block_preconditioner_type == "AMG")
+        preconditioner = std::make_unique<PreconditionerAMG<VectorType>>(
+          *mass_laplace_operator);
+      else if (params.block_preconditioner_type == "GMG")
+        {
+          AssertThrow(false, ExcNotImplemented());
+        }
+      else
+        AssertThrow(false, ExcNotImplemented());
+
       // select time-integration scheme
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
@@ -1672,7 +1751,10 @@ namespace HeatEquation
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            comm_global, *mass_laplace_operator, evaluate_rhs_function);
+            comm_global,
+            *mass_laplace_operator,
+            *preconditioner,
+            evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
