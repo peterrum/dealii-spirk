@@ -67,6 +67,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <vector>
 
 using namespace dealii;
 
@@ -350,6 +351,9 @@ public:
   {
     this->mass_matrix_scaling    = mass_matrix_scaling;
     this->laplace_matrix_scaling = laplace_matrix_scaling;
+
+    for (const auto &op : attached_operators)
+      op->reinit(this->mass_matrix_scaling, this->laplace_matrix_scaling);
   }
 
   virtual void
@@ -399,9 +403,17 @@ public:
   virtual void
   compute_inverse_diagonal(VectorType &diagonal) const = 0;
 
+  void
+  attach(const MassLaplaceOperator &other) const
+  {
+    attached_operators.push_back(&other);
+  }
+
 protected:
   mutable double mass_matrix_scaling;
   mutable double laplace_matrix_scaling;
+
+  mutable std::vector<const MassLaplaceOperator *> attached_operators;
 };
 
 
@@ -617,6 +629,7 @@ public:
   void
   compute_inverse_diagonal(VectorType &diagonal) const override
   {
+    diagonal = 0.0;
     MatrixFreeTools::compute_diagonal(
       matrix_free,
       diagonal,
@@ -2006,8 +2019,6 @@ namespace HeatEquation
                                                       locally_relevant_dofs);
               constraints->reinit(locally_relevant_dofs);
 
-              DoFTools::make_hanging_node_constraints(*dof_handler,
-                                                      *constraints);
               DoFTools::make_zero_boundary_constraints(*dof_handler,
                                                        0,
                                                        *constraints);
@@ -2025,6 +2036,8 @@ namespace HeatEquation
                     *dof_handler, *constraints, quadrature);
               else
                 AssertThrow(false, ExcNotImplemented());
+
+              mass_laplace_operator->attach(*mg_operators[l]);
 
               mg_dof_handlers[l] = dof_handler;
               mg_constraints[l]  = constraints;
