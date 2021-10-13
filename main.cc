@@ -357,13 +357,33 @@ private:
 class MassLaplaceOperatorMatrixBased : public MassLaplaceOperator
 {
 public:
-  MassLaplaceOperatorMatrixBased(const SparseMatrixType &mass_matrix,
-                                 const SparseMatrixType &laplace_matrix)
-    : mass_matrix(mass_matrix)
-    , laplace_matrix(laplace_matrix)
-    , mass_matrix_scaling(1.0)
+  template <int dim, typename Number>
+  MassLaplaceOperatorMatrixBased(const DoFHandler<dim> &          dof_handler,
+                                 const AffineConstraints<Number> &constraints,
+                                 const Quadrature<dim> &          quadrature)
+    : mass_matrix_scaling(1.0)
     , laplace_matrix_scaling(1.0)
-  {}
+  {
+    TrilinosWrappers::SparsityPattern sparsity_pattern(
+      dof_handler.locally_owned_dofs(), dof_handler.get_communicator());
+    DoFTools::make_sparsity_pattern(dof_handler,
+                                    sparsity_pattern,
+                                    constraints,
+                                    false);
+    sparsity_pattern.compress();
+
+    mass_matrix.reinit(sparsity_pattern);
+    laplace_matrix.reinit(sparsity_pattern);
+
+    MatrixCreator::create_mass_matrix(dof_handler,
+                                      quadrature,
+                                      mass_matrix,
+                                      constraints);
+    MatrixCreator::create_laplace_matrix(dof_handler,
+                                         quadrature,
+                                         laplace_matrix,
+                                         constraints);
+  }
 
   void
   reinit(const double mass_matrix_scaling,
@@ -438,8 +458,8 @@ public:
 
 
 private:
-  const SparseMatrixType &mass_matrix;
-  const SparseMatrixType &laplace_matrix;
+  mutable SparseMatrixType mass_matrix;
+  mutable SparseMatrixType laplace_matrix;
 
   mutable double mass_matrix_scaling;
   mutable double laplace_matrix_scaling;
@@ -1445,6 +1465,27 @@ namespace HeatEquation
 
       setup_system();
 
+      std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
+
+      if (params.operator_type == "MatrixBased")
+        {
+          mass_laplace_operator =
+            std::make_unique<MassLaplaceOperatorMatrixBased>(dof_handler,
+                                                             constraints,
+                                                             quadrature);
+        }
+      else if (params.operator_type == "MatrixFree")
+        {
+          AssertThrow(false, ExcNotImplemented());
+        }
+      else
+        {
+          AssertThrow(false, ExcNotImplemented());
+        }
+
+      this->initialize_dof_vector(solution);
+      system_rhs.reinit(system_rhs);
+
       double       time            = 0.0;
       unsigned int timestep_number = 0;
 
@@ -1463,23 +1504,6 @@ namespace HeatEquation
       // select time-integration scheme
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
-
-      std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
-
-      if (params.operator_type == "MatrixBased")
-        {
-          mass_laplace_operator =
-            std::make_unique<MassLaplaceOperatorMatrixBased>(mass_matrix,
-                                                             laplace_matrix);
-        }
-      else if (params.operator_type == "MatrixFree")
-        {
-          AssertThrow(false, ExcNotImplemented());
-        }
-      else
-        {
-          AssertThrow(false, ExcNotImplemented());
-        }
 
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
@@ -1555,29 +1579,6 @@ namespace HeatEquation
       // note: program is limited to homogenous DBCs
       DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
       constraints.close();
-
-      TrilinosWrappers::SparsityPattern sparsity_pattern(
-        dof_handler.locally_owned_dofs(), dof_handler.get_communicator());
-      DoFTools::make_sparsity_pattern(dof_handler,
-                                      sparsity_pattern,
-                                      constraints,
-                                      false);
-      sparsity_pattern.compress();
-
-      mass_matrix.reinit(sparsity_pattern);
-      laplace_matrix.reinit(sparsity_pattern);
-
-      MatrixCreator::create_mass_matrix(dof_handler,
-                                        quadrature,
-                                        mass_matrix,
-                                        constraints);
-      MatrixCreator::create_laplace_matrix(dof_handler,
-                                           quadrature,
-                                           laplace_matrix,
-                                           constraints);
-
-      this->initialize_dof_vector(solution);
-      system_rhs.reinit(system_rhs);
     }
 
     template <typename Number>
