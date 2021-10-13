@@ -592,7 +592,7 @@ private:
                                         integrator.get_value(q),
                                       q);
             if (laplace_matrix_scaling != 0.0)
-              integrator.submit_gradient(laplace_matrix_scaling *
+              integrator.submit_gradient(-laplace_matrix_scaling *
                                            integrator.get_gradient(q),
                                          q);
           }
@@ -624,7 +624,7 @@ private:
           integrator.submit_value(mass_matrix_scaling * integrator.get_value(q),
                                   q);
         if (laplace_matrix_scaling != 0.0)
-          integrator.submit_gradient(laplace_matrix_scaling *
+          integrator.submit_gradient(-laplace_matrix_scaling *
                                        integrator.get_gradient(q),
                                      q);
       }
