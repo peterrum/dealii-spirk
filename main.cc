@@ -1434,19 +1434,37 @@ namespace TimeIntegrationSchemes
       {
         const auto time = std::chrono::system_clock::now();
 
-        VectorType tmp;
-        tmp.reinit(src.block(0));
+        if (false)
+          {
+            dst = 0;
+            for (unsigned int i = 0; i < n_stages; ++i)
+              for (unsigned int j = 0; j < n_stages; ++j)
+                {
+                  const unsigned int k = (j + i) % n_stages;
+                  if (j == 0) // first process diagonal
+                    op.vmult(dst.block(i),
+                             src.block(k),
+                             A_inv(i, k),
+                             -time_step);
+                  else // proceed with off-diagonals
+                    op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
+                }
+          }
+        else
+          {
+            VectorType tmp;
+            tmp.reinit(src.block(0));
+            for (unsigned int i = 0; i < n_stages; ++i)
+              op.vmult(dst.block(i), src.block(i), 0.0, -time_step);
 
-        dst = 0;
-        for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages; ++j)
-            {
-              const unsigned int k = (j + i) % n_stages;
-              if (j == 0) // first process diagonal
-                op.vmult(dst.block(i), src.block(k), A_inv(i, k), -time_step);
-              else // proceed with off-diagonals
-                op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
-            }
+            for (unsigned int i = 0; i < n_stages; ++i)
+              {
+                op.vmult(tmp, src.block(i), 1.0, 0.0);
+
+                for (unsigned int j = 0; j < n_stages; ++j)
+                  dst.block(j).add(A_inv(j, i), tmp);
+              }
+          }
 
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
