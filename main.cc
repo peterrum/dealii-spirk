@@ -1817,6 +1817,20 @@ namespace HeatEquation
                 std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
               auto constraints = std::make_shared<AffineConstraints<double>>();
 
+              dof_handler->distribute_dofs(fe);
+
+              IndexSet locally_relevant_dofs;
+              DoFTools::extract_locally_relevant_dofs(*dof_handler,
+                                                      locally_relevant_dofs);
+              constraints->reinit(locally_relevant_dofs);
+
+              DoFTools::make_hanging_node_constraints(*dof_handler,
+                                                      *constraints);
+              DoFTools::make_zero_boundary_constraints(*dof_handler,
+                                                       0,
+                                                       *constraints);
+
+              constraints->close();
 
               if (params.operator_type == "MatrixBased")
                 mg_operators[l] =
@@ -1829,6 +1843,9 @@ namespace HeatEquation
                     *dof_handler, *constraints, quadrature);
               else
                 AssertThrow(false, ExcNotImplemented());
+
+              mg_dof_handlers[l] = dof_handler;
+              mg_constraints[l]  = constraints;
             }
 
           preconditioner = std::make_unique<PreconditionerGMG<dim, VectorType>>(
