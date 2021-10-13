@@ -53,6 +53,8 @@
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
 #include <deal.II/numerics/matrix_tools.h>
@@ -677,9 +679,6 @@ public:
     , additional_data(additional_data)
   {}
 
-  ~PreconditionerAMG()
-  {}
-
   virtual void
   reinit() const override
   {
@@ -706,6 +705,58 @@ private:
     additional_data;
 
   mutable TrilinosWrappers::PreconditionAMG amg;
+};
+
+
+
+template <int dim, typename VectorType>
+class PreconditionerGMG : public PreconditionerBase<VectorType>
+{
+public:
+  PreconditionerGMG(
+    const std::vector<std::shared_ptr<const Triangulation<dim>>>
+      &mg_triangulations,
+    const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
+      &mg_dof_handlers,
+    const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+      &mg_constraints,
+    const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
+      &mg_operators)
+    : mg_triangulations(mg_triangulations)
+    , mg_dof_handlers(mg_dof_handlers)
+    , mg_constraints(mg_constraints)
+    , mg_operators(mg_operators)
+  {
+    AssertThrow(false, ExcNotImplemented());
+  }
+
+  virtual void
+  reinit() const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+  }
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    (void)dst;
+    (void)src;
+  }
+
+  virtual std::unique_ptr<const PreconditionerBase<VectorType>>
+  clone() const override
+  {
+    return std::make_unique<PreconditionerGMG<dim, VectorType>>(
+      mg_triangulations, mg_dof_handlers, mg_constraints, mg_operators);
+  }
+
+private:
+  const std::vector<std::shared_ptr<const Triangulation<dim>>>
+                                                              mg_triangulations;
+  const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
+  const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+    mg_constraints;
+  const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>> mg_operators;
 };
 
 
@@ -1740,11 +1791,48 @@ namespace HeatEquation
       std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
 
       if (params.block_preconditioner_type == "AMG")
-        preconditioner = std::make_unique<PreconditionerAMG<VectorType>>(
-          *mass_laplace_operator);
+        {
+          preconditioner = std::make_unique<PreconditionerAMG<VectorType>>(
+            *mass_laplace_operator);
+        }
       else if (params.block_preconditioner_type == "GMG")
         {
-          AssertThrow(false, ExcNotImplemented());
+          const std::vector<std::shared_ptr<const Triangulation<dim>>>
+            mg_triangulations = MGTransferGlobalCoarseningTools::
+              create_geometric_coarsening_sequence(triangulation);
+
+          const unsigned int min_level = 0;
+          const unsigned int max_level = mg_triangulations.size() - 1;
+
+          MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
+            min_level, max_level);
+          MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+            mg_constraints(min_level, max_level);
+          MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
+            mg_operators(min_level, max_level);
+
+          for (unsigned int l = min_level; l <= max_level; ++l)
+            {
+              auto dof_handler =
+                std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+              auto constraints = std::make_shared<AffineConstraints<double>>();
+
+
+              if (params.operator_type == "MatrixBased")
+                mg_operators[l] =
+                  std::make_unique<MassLaplaceOperatorMatrixBased>(*dof_handler,
+                                                                   *constraints,
+                                                                   quadrature);
+              else if (params.operator_type == "MatrixFree")
+                mg_operators[l] =
+                  std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
+                    *dof_handler, *constraints, quadrature);
+              else
+                AssertThrow(false, ExcNotImplemented());
+            }
+
+          preconditioner = std::make_unique<PreconditionerGMG<dim, VectorType>>(
+            mg_triangulations, mg_dof_handlers, mg_constraints, mg_operators);
         }
       else
         AssertThrow(false, ExcNotImplemented());
