@@ -323,11 +323,42 @@ namespace dealii
 } // namespace dealii
 
 
+
 class MassLaplaceOperator
 {
 public:
-  MassLaplaceOperator(const SparseMatrixType &mass_matrix,
-                      const SparseMatrixType &laplace_matrix)
+  virtual void
+  reinit(const double mass_matrix_scaling,
+         const double laplace_matrix_scaling) const = 0;
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const = 0;
+
+  virtual void
+  vmult(VectorType &      dst,
+        const VectorType &src,
+        const double      mass_matrix_scaling,
+        const double      laplace_matrix_scaling) const = 0;
+
+  virtual void
+  vmult_add(VectorType &      dst,
+            const VectorType &src,
+            const double      mass_matrix_scaling,
+            const double      laplace_matrix_scaling) const = 0;
+
+  virtual const SparseMatrixType &
+  get_system_matrix() const = 0;
+
+private:
+};
+
+
+
+class MassLaplaceOperatorMatrixBased : public MassLaplaceOperator
+{
+public:
+  MassLaplaceOperatorMatrixBased(const SparseMatrixType &mass_matrix,
+                                 const SparseMatrixType &laplace_matrix)
     : mass_matrix(mass_matrix)
     , laplace_matrix(laplace_matrix)
     , mass_matrix_scaling(1.0)
@@ -336,14 +367,14 @@ public:
 
   void
   reinit(const double mass_matrix_scaling,
-         const double laplace_matrix_scaling) const
+         const double laplace_matrix_scaling) const override
   {
     this->mass_matrix_scaling    = mass_matrix_scaling;
     this->laplace_matrix_scaling = laplace_matrix_scaling;
   }
 
   void
-  vmult(VectorType &dst, const VectorType &src) const
+  vmult(VectorType &dst, const VectorType &src) const override
   {
     this->vmult(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
   }
@@ -352,7 +383,7 @@ public:
   vmult(VectorType &      dst,
         const VectorType &src,
         const double      mass_matrix_scaling,
-        const double      laplace_matrix_scaling) const
+        const double      laplace_matrix_scaling) const override
   {
     dst = 0.0; // TODO
     this->vmult_add(dst, src, mass_matrix_scaling, laplace_matrix_scaling);
@@ -362,7 +393,7 @@ public:
   vmult_add(VectorType &      dst,
             const VectorType &src,
             const double      mass_matrix_scaling,
-            const double      laplace_matrix_scaling) const
+            const double      laplace_matrix_scaling) const override
   {
     tmp.reinit(src, true);
 
@@ -396,7 +427,7 @@ public:
   }
 
   const SparseMatrixType &
-  get_system_matrix() const
+  get_system_matrix() const override
   {
     tmp_matrix.copy_from(laplace_matrix);
     tmp_matrix *= laplace_matrix_scaling;
@@ -1347,6 +1378,9 @@ namespace HeatEquation
 
     unsigned int irk_stages = 3;
 
+    std::string operator_type             = "MatrixBased";
+    std::string block_preconditioner_type = "AMG";
+
     bool do_output_paraview = false;
 
     void
@@ -1362,6 +1396,17 @@ namespace HeatEquation
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
+
+      prm.add_parameter("OperatorType",
+                        operator_type,
+                        "",
+                        Patterns::Selection("MatrixBased|MatrixFree"));
+      prm.add_parameter("BlockPreconditionerType",
+                        block_preconditioner_type,
+                        "",
+                        Patterns::Selection("AMG|GMG"));
+
+      prm.add_parameter("DoOutputParaview", do_output_paraview);
 
       std::ifstream file;
       file.open(file_name);
@@ -1419,17 +1464,32 @@ namespace HeatEquation
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
 
-      MassLaplaceOperator mass_laplace_operator(mass_matrix, laplace_matrix);
+      std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
+
+      if (params.operator_type == "MatrixBased")
+        {
+          mass_laplace_operator =
+            std::make_unique<MassLaplaceOperatorMatrixBased>(mass_matrix,
+                                                             laplace_matrix);
+        }
+      else if (params.operator_type == "MatrixFree")
+        {
+          AssertThrow(false, ExcNotImplemented());
+        }
+      else
+        {
+          AssertThrow(false, ExcNotImplemented());
+        }
 
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            comm_global, mass_laplace_operator, evaluate_rhs_function);
+            comm_global, *mass_laplace_operator, evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
                                                         params.irk_stages,
-                                                        mass_laplace_operator,
+                                                        *mass_laplace_operator,
                                                         evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
@@ -1437,7 +1497,7 @@ namespace HeatEquation
             comm_global,
             comm_row,
             params.irk_stages,
-            mass_laplace_operator,
+            *mass_laplace_operator,
             evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
