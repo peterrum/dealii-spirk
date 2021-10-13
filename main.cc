@@ -53,6 +53,12 @@
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <deal.II/multigrid/mg_coarse.h>
+#include <deal.II/multigrid/mg_matrix.h>
+#include <deal.II/multigrid/mg_smoother.h>
+#include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+#include <deal.II/multigrid/multigrid.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
 #include <deal.II/numerics/matrix_tools.h>
@@ -61,6 +67,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <vector>
 
 using namespace dealii;
 
@@ -328,9 +335,11 @@ namespace dealii
 
 
 
-class MassLaplaceOperator
+class MassLaplaceOperator : public Subscriptor
 {
 public:
+  using Number = typename VectorType::value_type;
+
   MassLaplaceOperator()
     : mass_matrix_scaling(1.0)
     , laplace_matrix_scaling(1.0)
@@ -342,6 +351,9 @@ public:
   {
     this->mass_matrix_scaling    = mass_matrix_scaling;
     this->laplace_matrix_scaling = laplace_matrix_scaling;
+
+    for (const auto &op : attached_operators)
+      op->reinit(this->mass_matrix_scaling, this->laplace_matrix_scaling);
   }
 
   virtual void
@@ -354,6 +366,18 @@ public:
         const double      laplace_matrix_scaling) const
   {
     this->reinit(mass_matrix_scaling, laplace_matrix_scaling);
+    this->vmult(dst, src);
+  }
+
+  virtual types::global_dof_index
+  m() const = 0;
+
+  virtual Number
+  el(unsigned int, unsigned int) const = 0;
+
+  void
+  Tvmult(VectorType &dst, const VectorType &src) const
+  {
     this->vmult(dst, src);
   }
 
@@ -376,9 +400,20 @@ public:
   virtual const SparseMatrixType &
   get_system_matrix() const = 0;
 
+  virtual void
+  compute_inverse_diagonal(VectorType &diagonal) const = 0;
+
+  void
+  attach(const MassLaplaceOperator &other) const
+  {
+    attached_operators.push_back(&other);
+  }
+
 protected:
   mutable double mass_matrix_scaling;
   mutable double laplace_matrix_scaling;
+
+  mutable std::vector<const MassLaplaceOperator *> attached_operators;
 };
 
 
@@ -419,6 +454,19 @@ public:
       dof_handler.locally_owned_dofs(),
       locally_relevant_dofs,
       dof_handler.get_communicator());
+  }
+
+  types::global_dof_index
+  m() const override
+  {
+    return mass_matrix.m();
+  }
+
+  Number
+  el(unsigned int i, unsigned int j) const
+  {
+    return mass_matrix_scaling * mass_matrix(i, j) +
+           laplace_matrix_scaling * laplace_matrix(i, j);
   }
 
   void
@@ -468,6 +516,13 @@ public:
       }
   }
 
+  void
+  compute_inverse_diagonal(VectorType &diagonal) const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)diagonal;
+  }
+
   const SparseMatrixType &
   get_system_matrix() const override
   {
@@ -504,6 +559,19 @@ public:
     data.mapping_update_flags = update_values | update_gradients;
     matrix_free.reinit(
       MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+  }
+
+  types::global_dof_index
+  m() const override
+  {
+    return matrix_free.get_dof_handler().n_dofs();
+  }
+
+  Number
+  el(unsigned int, unsigned int) const override
+  {
+    Assert(false, ExcNotImplemented());
+    return 0.0;
   }
 
   void
@@ -548,8 +616,6 @@ public:
         system_matrix.reinit(dsp);
       }
 
-    system_matrix = 0.0;
-
     MatrixFreeTools::compute_matrix(
       matrix_free,
       *constraints,
@@ -558,6 +624,19 @@ public:
       this);
 
     return system_matrix;
+  }
+
+  void
+  compute_inverse_diagonal(VectorType &diagonal) const override
+  {
+    diagonal = 0.0;
+    MatrixFreeTools::compute_diagonal(
+      matrix_free,
+      diagonal,
+      &MassLaplaceOperatorMatrixFree::do_cell_integral,
+      this);
+    for (auto &i : diagonal)
+      i = (std::abs(i) > 1.0e-10) ? (1.0 / i) : 1.0;
   }
 
 
@@ -647,6 +726,236 @@ private:
 
 
 
+template <typename VectorType>
+class PreconditionerBase
+{
+public:
+  virtual void
+  reinit() const = 0;
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const = 0;
+
+  virtual std::unique_ptr<const PreconditionerBase<VectorType>>
+  clone() const = 0;
+
+
+private:
+};
+
+
+
+template <typename VectorType>
+class PreconditionerAMG : public PreconditionerBase<VectorType>
+{
+public:
+  PreconditionerAMG(
+    const MassLaplaceOperator &op,
+    const typename TrilinosWrappers::PreconditionAMG::AdditionalData
+      additional_data =
+        typename TrilinosWrappers::PreconditionAMG::AdditionalData())
+    : op(op)
+    , additional_data(additional_data)
+  {}
+
+  virtual void
+  reinit() const override
+  {
+    amg.initialize(op.get_system_matrix(), additional_data);
+  }
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    amg.vmult(dst, src);
+  }
+
+  virtual std::unique_ptr<const PreconditionerBase<VectorType>>
+  clone() const override
+  {
+    return std::make_unique<PreconditionerAMG<VectorType>>(
+      this->op, this->additional_data);
+  }
+
+private:
+  const MassLaplaceOperator &op;
+
+  const typename TrilinosWrappers::PreconditionAMG::AdditionalData
+    additional_data;
+
+  mutable TrilinosWrappers::PreconditionAMG amg;
+};
+
+
+
+struct PreconditionerGMGAdditionalData
+{
+  double       smoothing_range               = 20;
+  unsigned int smoothing_degree              = 5;
+  unsigned int smoothing_eig_cg_n_iterations = 20;
+
+  unsigned int coarse_grid_smoother_sweeps = 1;
+  unsigned int coarse_grid_n_cycles        = 1;
+  std::string  coarse_grid_smoother_type   = "ILU";
+
+  unsigned int coarse_grid_maxiter = 1000;
+  double       coarse_grid_abstol  = 1e-20;
+  double       coarse_grid_reltol  = 1e-4;
+};
+
+
+template <int dim, typename VectorType>
+class PreconditionerGMG : public PreconditionerBase<VectorType>
+{
+public:
+  PreconditionerGMG(
+    const DoFHandler<dim> &dof_handler,
+    const std::vector<std::shared_ptr<const Triangulation<dim>>>
+      &mg_triangulations,
+    const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
+      &mg_dof_handlers,
+    const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+      &mg_constraints,
+    const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
+      &mg_operators)
+    : dof_handler(dof_handler)
+    , mg_triangulations(mg_triangulations)
+    , mg_dof_handlers(mg_dof_handlers)
+    , mg_constraints(mg_constraints)
+    , mg_operators(mg_operators)
+    , min_level(mg_dof_handlers.min_level())
+    , max_level(mg_dof_handlers.max_level())
+    , transfers(min_level, max_level)
+    , transfer(transfers, [&](const auto l, auto &vec) {
+      this->mg_operators[l]->initialize_dof_vector(vec);
+    })
+  {
+    for (auto l = min_level; l < max_level; ++l)
+      transfers[l + 1].reinit(*mg_dof_handlers[l + 1],
+                              *mg_dof_handlers[l],
+                              *mg_constraints[l + 1],
+                              *mg_constraints[l]);
+  }
+
+  virtual void
+  reinit() const override
+  {
+    PreconditionerGMGAdditionalData additional_data;
+
+    mg_matrix = std::make_unique<mg::Matrix<VectorType>>(mg_operators);
+
+    // setup smoothers
+    MGLevelObject<typename SmootherType::AdditionalData> smoother_data(
+      min_level, max_level);
+
+    for (unsigned int level = min_level; level <= max_level; ++level)
+      {
+        smoother_data[level].preconditioner =
+          std::make_shared<SmootherPreconditionerType>();
+        mg_operators[level]->compute_inverse_diagonal(
+          smoother_data[level].preconditioner->get_vector());
+        smoother_data[level].smoothing_range = additional_data.smoothing_range;
+        smoother_data[level].degree          = additional_data.smoothing_degree;
+        smoother_data[level].eig_cg_n_iterations =
+          additional_data.smoothing_eig_cg_n_iterations;
+      }
+
+    mg_smoother.initialize(mg_operators, smoother_data);
+
+    // setup coarse-grid solver
+    coarse_grid_solver_control =
+      std::make_unique<ReductionControl>(additional_data.coarse_grid_maxiter,
+                                         additional_data.coarse_grid_abstol,
+                                         additional_data.coarse_grid_reltol,
+                                         false,
+                                         false);
+    coarse_grid_solver =
+      std::make_unique<SolverCG<VectorType>>(*coarse_grid_solver_control);
+
+    precondition_amg = std::make_unique<TrilinosWrappers::PreconditionAMG>();
+
+    TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+    amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
+    amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
+    amg_data.smoother_type = additional_data.coarse_grid_smoother_type.c_str();
+    precondition_amg->initialize(mg_operators[min_level]->get_system_matrix(),
+                                 amg_data);
+    mg_coarse = std::make_unique<
+      MGCoarseGridIterativeSolver<VectorType,
+                                  SolverCG<VectorType>,
+                                  LevelMatrixType,
+                                  TrilinosWrappers::PreconditionAMG>>(
+      *coarse_grid_solver, *mg_operators[min_level], *precondition_amg);
+
+    mg = std::make_unique<Multigrid<VectorType>>(
+      *mg_matrix, *mg_coarse, transfer, mg_smoother, mg_smoother);
+    preconditioner =
+      std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
+        dof_handler, *mg, transfer);
+  }
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    preconditioner->vmult(dst, src);
+  }
+
+  virtual std::unique_ptr<const PreconditionerBase<VectorType>>
+  clone() const override
+  {
+    return std::make_unique<PreconditionerGMG<dim, VectorType>>(
+      dof_handler,
+      mg_triangulations,
+      mg_dof_handlers,
+      mg_constraints,
+      mg_operators);
+  }
+
+private:
+  const DoFHandler<dim> &dof_handler;
+
+  const std::vector<std::shared_ptr<const Triangulation<dim>>>
+    &                                                         mg_triangulations;
+  const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
+  const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+    mg_constraints;
+  const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>> mg_operators;
+
+  const unsigned int min_level;
+  const unsigned int max_level;
+
+  using LevelMatrixType = MassLaplaceOperator;
+  using MGTransferType  = MGTransferGlobalCoarsening<dim, VectorType>;
+
+  MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
+  MGTransferType                                     transfer;
+
+  using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
+  using SmootherType               = PreconditionChebyshev<LevelMatrixType,
+                                             VectorType,
+                                             SmootherPreconditionerType>;
+
+  mutable std::unique_ptr<mg::Matrix<VectorType>> mg_matrix;
+
+  mutable MGSmootherPrecondition<LevelMatrixType, SmootherType, VectorType>
+    mg_smoother;
+
+  mutable std::unique_ptr<ReductionControl> coarse_grid_solver_control;
+
+  mutable std::unique_ptr<SolverCG<VectorType>> coarse_grid_solver;
+
+  mutable std::unique_ptr<TrilinosWrappers::PreconditionAMG> precondition_amg;
+
+  mutable std::unique_ptr<MGCoarseGridBase<VectorType>> mg_coarse;
+
+  mutable std::unique_ptr<Multigrid<VectorType>> mg;
+
+  mutable std::unique_ptr<PreconditionMG<dim, VectorType, MGTransferType>>
+    preconditioner;
+};
+
+
+
 namespace TimeIntegrationSchemes
 {
   /**
@@ -673,12 +982,14 @@ namespace TimeIntegrationSchemes
   class OneStepTheta : public Interface
   {
   public:
-    OneStepTheta(const MPI_Comm             comm,
-                 const MassLaplaceOperator &system_matrix,
+    OneStepTheta(const MPI_Comm                        comm,
+                 const MassLaplaceOperator &           system_matrix,
+                 const PreconditionerBase<VectorType> &block_preconditioner,
                  const std::function<void(const double, VectorType &)>
                    &evaluate_rhs_function)
       : theta(0.5)
       , system_matrix(system_matrix)
+      , block_preconditioner(block_preconditioner)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -725,7 +1036,7 @@ namespace TimeIntegrationSchemes
       SystemMatrix sm(system_matrix);
 
       // ... create preconditioner
-      Preconditioner preconditioner(system_matrix);
+      Preconditioner preconditioner(system_matrix, block_preconditioner);
 
       // ... solve
       cg.solve(sm, solution, system_rhs, preconditioner);
@@ -761,28 +1072,29 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(const MassLaplaceOperator &system_matrix)
+      Preconditioner(const MassLaplaceOperator &           system_matrix,
+                     const PreconditionerBase<VectorType> &precondition)
         : system_matrix(system_matrix)
+        , precondition(precondition)
       {
-        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        precondition_amg.initialize(system_matrix.get_system_matrix(),
-                                    amg_data);
+        precondition.reinit();
       }
 
       void
       vmult(VectorType &dst, const VectorType &src) const
       {
-        precondition_amg.vmult(dst, src);
+        precondition.vmult(dst, src);
       }
 
     private:
-      const MassLaplaceOperator &       system_matrix;
-      TrilinosWrappers::PreconditionAMG precondition_amg;
+      const MassLaplaceOperator &           system_matrix;
+      const PreconditionerBase<VectorType> &precondition;
     };
 
     const double theta;
 
-    const MassLaplaceOperator &system_matrix;
+    const MassLaplaceOperator &           system_matrix;
+    const PreconditionerBase<VectorType> &block_preconditioner;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -797,9 +1109,10 @@ namespace TimeIntegrationSchemes
   class IRKBase : public Interface
   {
   public:
-    IRKBase(const MPI_Comm             comm,
-            const unsigned int         n_stages,
-            const MassLaplaceOperator &op,
+    IRKBase(const MPI_Comm                        comm,
+            const unsigned int                    n_stages,
+            const MassLaplaceOperator &           op,
+            const PreconditionerBase<VectorType> &block_preconditioner,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
       : n_stages(n_stages)
@@ -810,6 +1123,7 @@ namespace TimeIntegrationSchemes
       , c_vec(load_vector_from_file(n_stages, "c_vec_"))
       , d_vec(load_vector_from_file(n_stages, "D_vec_"))
       , op(op)
+      , block_preconditioner(block_preconditioner)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -895,7 +1209,8 @@ namespace TimeIntegrationSchemes
     const Vector<typename VectorType::value_type>     c_vec;
     const Vector<typename VectorType::value_type>     d_vec;
 
-    const MassLaplaceOperator &op;
+    const MassLaplaceOperator &           op;
+    const PreconditionerBase<VectorType> &block_preconditioner;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -918,12 +1233,13 @@ namespace TimeIntegrationSchemes
   class IRK : public IRKBase
   {
   public:
-    IRK(const MPI_Comm             comm,
-        const unsigned int         n_stages,
-        const MassLaplaceOperator &op,
+    IRK(const MPI_Comm                        comm,
+        const unsigned int                    n_stages,
+        const MassLaplaceOperator &           op,
+        const PreconditionerBase<VectorType> &block_preconditioner,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : IRKBase(comm, n_stages, op, evaluate_rhs_function)
+      : IRKBase(comm, n_stages, op, block_preconditioner, evaluate_rhs_function)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -951,6 +1267,7 @@ namespace TimeIntegrationSchemes
                                              T_inv,
                                              time_step,
                                              op,
+                                             block_preconditioner,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -1091,10 +1408,11 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double               time_step,
-                     const MassLaplaceOperator &op,
-                     double &                   time_bc,
-                     double &                   time_solver)
+                     const double                          time_step,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &preconditioner,
+                     double &                              time_bc,
+                     double &                              time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , cut_off_tolerance(1e-12)
@@ -1112,10 +1430,10 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-
             op.reinit(d_vec[i], -tau);
-            preconditioners[i].initialize(op.get_system_matrix(), amg_data);
+
+            preconditioners[i] = preconditioner.clone();
+            preconditioners[i]->reinit();
           }
       }
 
@@ -1149,7 +1467,7 @@ namespace TimeIntegrationSchemes
             solver.solve(op,
                          tmp_vectors.block(i),
                          dst.block(i),
-                         preconditioners[i]);
+                         *preconditioners[i]);
 
             n_iterations += solver_control.last_step();
           }
@@ -1192,8 +1510,9 @@ namespace TimeIntegrationSchemes
 
       const double tau;
 
-      const MassLaplaceOperator &                    op;
-      std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
+      const MassLaplaceOperator &op;
+      std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+        preconditioners;
 
       double &time_bc;
       double &time_solver;
@@ -1220,13 +1539,18 @@ namespace TimeIntegrationSchemes
   public:
     using ReshapedVectorType = LinearAlgebra::ReshapedVector<VectorType>;
 
-    IRKStageParallel(const MPI_Comm             comm_global,
-                     const MPI_Comm             comm_row,
-                     const unsigned int         n_stages,
-                     const MassLaplaceOperator &op,
+    IRKStageParallel(const MPI_Comm                        comm_global,
+                     const MPI_Comm                        comm_row,
+                     const unsigned int                    n_stages,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &block_preconditioner,
                      const std::function<void(const double, VectorType &)>
                        &evaluate_rhs_function)
-      : IRKBase(comm_global, n_stages, op, evaluate_rhs_function)
+      : IRKBase(comm_global,
+                n_stages,
+                op,
+                block_preconditioner,
+                evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
@@ -1257,6 +1581,7 @@ namespace TimeIntegrationSchemes
                                              T_inv,
                                              time_step,
                                              op,
+                                             block_preconditioner,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -1454,10 +1779,11 @@ namespace TimeIntegrationSchemes
                      const Vector<typename VectorType::value_type> &d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double               time_step,
-                     const MassLaplaceOperator &op,
-                     double &                   time_bc,
-                     double &                   time_solver)
+                     const double                          time_step,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &preconditioners,
+                     double &                              time_bc,
+                     double &                              time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
@@ -1466,14 +1792,13 @@ namespace TimeIntegrationSchemes
         , T_mat_inv(T_inv)
         , tau(time_step)
         , op(op)
+        , preconditioners(preconditioners)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
       {
-        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-
         op.reinit(d_vec[my_stage], -tau);
-        preconditioners.initialize(op.get_system_matrix(), amg_data);
+        preconditioners.reinit();
       }
 
       void
@@ -1540,7 +1865,7 @@ namespace TimeIntegrationSchemes
 
       const MassLaplaceOperator &op;
 
-      TrilinosWrappers::PreconditionAMG preconditioners;
+      const PreconditionerBase<VectorType> &preconditioners;
 
       double &time_bc;
       double &time_solver;
@@ -1657,6 +1982,78 @@ namespace HeatEquation
       else
         AssertThrow(false, ExcNotImplemented());
 
+      // select preconditioner
+      std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
+
+      std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
+
+      if (params.block_preconditioner_type == "AMG")
+        {
+          preconditioner = std::make_unique<PreconditionerAMG<VectorType>>(
+            *mass_laplace_operator);
+        }
+      else if (params.block_preconditioner_type == "GMG")
+        {
+          mg_triangulations = MGTransferGlobalCoarseningTools::
+            create_geometric_coarsening_sequence(triangulation);
+
+          const unsigned int min_level = 0;
+          const unsigned int max_level = mg_triangulations.size() - 1;
+
+          MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
+            min_level, max_level);
+          MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+            mg_constraints(min_level, max_level);
+          MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
+            mg_operators(min_level, max_level);
+
+          for (unsigned int l = min_level; l <= max_level; ++l)
+            {
+              auto dof_handler =
+                std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+              auto constraints = std::make_shared<AffineConstraints<double>>();
+
+              dof_handler->distribute_dofs(fe);
+
+              IndexSet locally_relevant_dofs;
+              DoFTools::extract_locally_relevant_dofs(*dof_handler,
+                                                      locally_relevant_dofs);
+              constraints->reinit(locally_relevant_dofs);
+
+              DoFTools::make_zero_boundary_constraints(*dof_handler,
+                                                       0,
+                                                       *constraints);
+
+              constraints->close();
+
+              if (params.operator_type == "MatrixBased")
+                mg_operators[l] =
+                  std::make_unique<MassLaplaceOperatorMatrixBased>(*dof_handler,
+                                                                   *constraints,
+                                                                   quadrature);
+              else if (params.operator_type == "MatrixFree")
+                mg_operators[l] =
+                  std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
+                    *dof_handler, *constraints, quadrature);
+              else
+                AssertThrow(false, ExcNotImplemented());
+
+              mass_laplace_operator->attach(*mg_operators[l]);
+
+              mg_dof_handlers[l] = dof_handler;
+              mg_constraints[l]  = constraints;
+            }
+
+          preconditioner = std::make_unique<PreconditionerGMG<dim, VectorType>>(
+            this->dof_handler,
+            mg_triangulations,
+            mg_dof_handlers,
+            mg_constraints,
+            mg_operators);
+        }
+      else
+        AssertThrow(false, ExcNotImplemented());
+
       // select time-integration scheme
       std::unique_ptr<TimeIntegrationSchemes::Interface>
         time_integration_scheme;
@@ -1672,12 +2069,16 @@ namespace HeatEquation
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            comm_global, *mass_laplace_operator, evaluate_rhs_function);
+            comm_global,
+            *mass_laplace_operator,
+            *preconditioner,
+            evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
                                                         params.irk_stages,
                                                         *mass_laplace_operator,
+                                                        *preconditioner,
                                                         evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
@@ -1686,6 +2087,7 @@ namespace HeatEquation
             comm_row,
             params.irk_stages,
             *mass_laplace_operator,
+            *preconditioner,
             evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
