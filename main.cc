@@ -49,6 +49,10 @@
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/vector_memory.templates.h>
 
+#include <deal.II/matrix_free/fe_evaluation.h>
+#include <deal.II/matrix_free/matrix_free.h>
+#include <deal.II/matrix_free/tools.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
 #include <deal.II/numerics/matrix_tools.h>
@@ -324,6 +328,325 @@ namespace dealii
 
 
 
+class MassLaplaceOperator
+{
+public:
+  MassLaplaceOperator()
+    : mass_matrix_scaling(1.0)
+    , laplace_matrix_scaling(1.0)
+  {}
+
+  void
+  reinit(const double mass_matrix_scaling,
+         const double laplace_matrix_scaling) const
+  {
+    this->mass_matrix_scaling    = mass_matrix_scaling;
+    this->laplace_matrix_scaling = laplace_matrix_scaling;
+  }
+
+  virtual void
+  initialize_dof_vector(VectorType &vec) const = 0;
+
+  virtual void
+  vmult(VectorType &      dst,
+        const VectorType &src,
+        const double      mass_matrix_scaling,
+        const double      laplace_matrix_scaling) const
+  {
+    this->reinit(mass_matrix_scaling, laplace_matrix_scaling);
+    this->vmult(dst, src);
+  }
+
+  virtual void
+  vmult(VectorType &dst, const VectorType &src) const = 0;
+
+  void
+  vmult_add(VectorType &      dst,
+            const VectorType &src,
+            const double      mass_matrix_scaling,
+            const double      laplace_matrix_scaling) const
+  {
+    this->reinit(mass_matrix_scaling, laplace_matrix_scaling);
+    this->vmult_add(dst, src);
+  }
+
+  virtual void
+  vmult_add(VectorType &dst, const VectorType &src) const = 0;
+
+  virtual const SparseMatrixType &
+  get_system_matrix() const = 0;
+
+protected:
+  mutable double mass_matrix_scaling;
+  mutable double laplace_matrix_scaling;
+};
+
+
+
+class MassLaplaceOperatorMatrixBased : public MassLaplaceOperator
+{
+public:
+  template <int dim, typename Number>
+  MassLaplaceOperatorMatrixBased(const DoFHandler<dim> &          dof_handler,
+                                 const AffineConstraints<Number> &constraints,
+                                 const Quadrature<dim> &          quadrature)
+  {
+    TrilinosWrappers::SparsityPattern sparsity_pattern(
+      dof_handler.locally_owned_dofs(), dof_handler.get_communicator());
+    DoFTools::make_sparsity_pattern(dof_handler,
+                                    sparsity_pattern,
+                                    constraints,
+                                    false);
+    sparsity_pattern.compress();
+
+    mass_matrix.reinit(sparsity_pattern);
+    laplace_matrix.reinit(sparsity_pattern);
+
+    MatrixCreator::create_mass_matrix(dof_handler,
+                                      quadrature,
+                                      mass_matrix,
+                                      constraints);
+    MatrixCreator::create_laplace_matrix(dof_handler,
+                                         quadrature,
+                                         laplace_matrix,
+                                         constraints);
+
+    IndexSet locally_relevant_dofs;
+
+    DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
+
+    this->partitioner = std::make_shared<const Utilities::MPI::Partitioner>(
+      dof_handler.locally_owned_dofs(),
+      locally_relevant_dofs,
+      dof_handler.get_communicator());
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    vec.reinit(partitioner);
+  }
+
+  void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    dst = 0.0; // TODO
+    this->vmult_add(dst, src);
+  }
+
+  void
+  vmult_add(VectorType &dst, const VectorType &src) const override
+  {
+    tmp.reinit(src, true);
+
+    if (mass_matrix_scaling == 0.0)
+      {
+        // nothing to do
+      }
+    else if (mass_matrix_scaling == 1.0)
+      {
+        mass_matrix.vmult_add(dst, src);
+      }
+    else
+      {
+        mass_matrix.vmult(tmp, src);
+        dst.add(mass_matrix_scaling, tmp);
+      }
+
+    if (laplace_matrix_scaling == 0.0)
+      {
+        // nothing to do
+      }
+    else if (laplace_matrix_scaling == 0.0)
+      {
+        laplace_matrix.vmult_add(dst, src);
+      }
+    else
+      {
+        laplace_matrix.vmult(tmp, src);
+        dst.add(laplace_matrix_scaling, tmp);
+      }
+  }
+
+  const SparseMatrixType &
+  get_system_matrix() const override
+  {
+    tmp_matrix.copy_from(laplace_matrix);
+    tmp_matrix *= laplace_matrix_scaling;
+    tmp_matrix.add(mass_matrix_scaling, mass_matrix);
+
+    return tmp_matrix;
+  }
+
+
+private:
+  mutable SparseMatrixType                                   mass_matrix;
+  mutable SparseMatrixType                                   laplace_matrix;
+  mutable std::shared_ptr<const Utilities::MPI::Partitioner> partitioner;
+
+  mutable VectorType       tmp;
+  mutable SparseMatrixType tmp_matrix;
+};
+
+
+
+template <int dim, typename Number>
+class MassLaplaceOperatorMatrixFree : public MassLaplaceOperator
+{
+public:
+  MassLaplaceOperatorMatrixFree(const DoFHandler<dim> &          dof_handler,
+                                const AffineConstraints<Number> &constraints,
+                                const Quadrature<dim> &          quadrature)
+  {
+    this->constraints = &constraints;
+
+    typename MatrixFree<dim, Number>::AdditionalData data;
+    data.mapping_update_flags = update_values | update_gradients;
+    matrix_free.reinit(
+      MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
+  void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    this->matrix_free.cell_loop(
+      &MassLaplaceOperatorMatrixFree::do_cell_integral_range,
+      this,
+      dst,
+      src,
+      true);
+  }
+
+  void
+  vmult_add(VectorType &dst, const VectorType &src) const override
+  {
+    this->matrix_free.cell_loop(
+      &MassLaplaceOperatorMatrixFree::do_cell_integral_range,
+      this,
+      dst,
+      src,
+      false);
+  }
+
+  const SparseMatrixType &
+  get_system_matrix() const override
+  {
+    if (system_matrix.m() == 0 && system_matrix.n() == 0)
+      {
+        const auto &dof_handler = this->matrix_free.get_dof_handler();
+        TrilinosWrappers::SparsityPattern dsp(
+          dof_handler.locally_owned_dofs(),
+          dof_handler.get_triangulation().get_communicator());
+        DoFTools::make_sparsity_pattern(dof_handler, dsp, *constraints);
+        dsp.compress();
+        system_matrix.reinit(dsp);
+      }
+
+    system_matrix = 0.0;
+
+    MatrixFreeTools::compute_matrix(
+      matrix_free,
+      *constraints,
+      system_matrix,
+      &MassLaplaceOperatorMatrixFree::do_cell_integral,
+      this);
+
+    return system_matrix;
+  }
+
+
+private:
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+  void
+  do_cell_integral_range(
+    const MatrixFree<dim, Number> &              matrix_free,
+    VectorType &                                 dst,
+    const VectorType &                           src,
+    const std::pair<unsigned int, unsigned int> &range) const
+  {
+    FECellIntegrator integrator(matrix_free, range);
+    for (unsigned cell = range.first; cell < range.second; ++cell)
+      {
+        integrator.reinit(cell);
+
+        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+          integrator.gather_evaluate(src,
+                                     EvaluationFlags::values |
+                                       EvaluationFlags::gradients);
+        else if (mass_matrix_scaling != 0.0)
+          integrator.gather_evaluate(src, EvaluationFlags::values);
+        else if (laplace_matrix_scaling != 0.0)
+          integrator.gather_evaluate(src, EvaluationFlags::gradients);
+
+        for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+          {
+            if (mass_matrix_scaling != 0.0)
+              integrator.submit_value(mass_matrix_scaling *
+                                        integrator.get_value(q),
+                                      q);
+            if (laplace_matrix_scaling != 0.0)
+              integrator.submit_gradient(-laplace_matrix_scaling *
+                                           integrator.get_gradient(q),
+                                         q);
+          }
+
+        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+          integrator.integrate_scatter(EvaluationFlags::values |
+                                         EvaluationFlags::gradients,
+                                       dst);
+        else if (mass_matrix_scaling != 0.0)
+          integrator.integrate_scatter(EvaluationFlags::values, dst);
+        else if (laplace_matrix_scaling != 0.0)
+          integrator.integrate_scatter(EvaluationFlags::gradients, dst);
+      }
+  }
+
+  void
+  do_cell_integral(FECellIntegrator &integrator) const
+  {
+    if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+    else if (mass_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::values);
+    else if (laplace_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::gradients);
+
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        if (mass_matrix_scaling != 0.0)
+          integrator.submit_value(mass_matrix_scaling * integrator.get_value(q),
+                                  q);
+        if (laplace_matrix_scaling != 0.0)
+          integrator.submit_gradient(-laplace_matrix_scaling *
+                                       integrator.get_gradient(q),
+                                     q);
+      }
+
+    if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::values |
+                           EvaluationFlags::gradients);
+    else if (mass_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::values);
+    else if (laplace_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::gradients);
+  }
+
+  SmartPointer<const AffineConstraints<Number>> constraints;
+
+  MatrixFree<dim, Number> matrix_free;
+
+  mutable SparseMatrixType system_matrix;
+};
+
+
+
 namespace TimeIntegrationSchemes
 {
   /**
@@ -350,14 +673,12 @@ namespace TimeIntegrationSchemes
   class OneStepTheta : public Interface
   {
   public:
-    OneStepTheta(const MPI_Comm          comm,
-                 const SparseMatrixType &mass_matrix,
-                 const SparseMatrixType &laplace_matrix,
+    OneStepTheta(const MPI_Comm             comm,
+                 const MassLaplaceOperator &system_matrix,
                  const std::function<void(const double, VectorType &)>
                    &evaluate_rhs_function)
       : theta(0.5)
-      , mass_matrix(mass_matrix)
-      , laplace_matrix(laplace_matrix)
+      , system_matrix(system_matrix)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -370,21 +691,17 @@ namespace TimeIntegrationSchemes
     {
       (void)timestep_number;
 
-      SparseMatrixType system_matrix;
-      VectorType       system_rhs;
-      VectorType       tmp;
-      VectorType       forcing_terms;
+      VectorType system_rhs;
+      VectorType tmp;
+      VectorType forcing_terms;
 
-      system_matrix.reinit(mass_matrix);
       system_rhs.reinit(solution);
       tmp.reinit(solution);
       forcing_terms.reinit(solution);
 
       // create right-hand-side vector
       // ... old solution
-      mass_matrix.vmult(system_rhs, solution);
-      laplace_matrix.vmult(tmp, solution);
-      system_rhs.add((1 - theta) * time_step, tmp);
+      system_matrix.vmult(system_rhs, solution, 1.0, (1 - theta) * time_step);
 
       // ... rhs function (new)
       evaluate_rhs_function(time, tmp);
@@ -398,8 +715,7 @@ namespace TimeIntegrationSchemes
       system_rhs += forcing_terms;
 
       // setup system matrix
-      system_matrix.copy_from(mass_matrix);
-      system_matrix.add(-(theta * time_step), laplace_matrix);
+      system_matrix.reinit(1.0, -(theta * time_step));
 
       // solve system
       SolverControl        solver_control(1000, 1e-8 * system_rhs.l2_norm());
@@ -428,7 +744,7 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const SparseMatrixType &system_matrix)
+      SystemMatrix(const MassLaplaceOperator &system_matrix)
         : system_matrix(system_matrix)
       {}
 
@@ -439,17 +755,18 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const SparseMatrixType &system_matrix;
+      const MassLaplaceOperator &system_matrix;
     };
 
     class Preconditioner
     {
     public:
-      Preconditioner(const SparseMatrixType &system_matrix)
+      Preconditioner(const MassLaplaceOperator &system_matrix)
         : system_matrix(system_matrix)
       {
         TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        precondition_amg.initialize(system_matrix, amg_data);
+        precondition_amg.initialize(system_matrix.get_system_matrix(),
+                                    amg_data);
       }
 
       void
@@ -459,14 +776,13 @@ namespace TimeIntegrationSchemes
       }
 
     private:
-      const SparseMatrixType &          system_matrix;
+      const MassLaplaceOperator &       system_matrix;
       TrilinosWrappers::PreconditionAMG precondition_amg;
     };
 
     const double theta;
 
-    const SparseMatrixType &mass_matrix;
-    const SparseMatrixType &laplace_matrix;
+    const MassLaplaceOperator &system_matrix;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -481,10 +797,9 @@ namespace TimeIntegrationSchemes
   class IRKBase : public Interface
   {
   public:
-    IRKBase(const MPI_Comm          comm,
-            const unsigned int      n_stages,
-            const SparseMatrixType &mass_matrix,
-            const SparseMatrixType &laplace_matrix,
+    IRKBase(const MPI_Comm             comm,
+            const unsigned int         n_stages,
+            const MassLaplaceOperator &op,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
       : n_stages(n_stages)
@@ -494,8 +809,7 @@ namespace TimeIntegrationSchemes
       , b_vec(load_vector_from_file(n_stages, "b_vec_"))
       , c_vec(load_vector_from_file(n_stages, "c_vec_"))
       , d_vec(load_vector_from_file(n_stages, "D_vec_"))
-      , mass_matrix(mass_matrix)
-      , laplace_matrix(laplace_matrix)
+      , op(op)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -581,8 +895,7 @@ namespace TimeIntegrationSchemes
     const Vector<typename VectorType::value_type>     c_vec;
     const Vector<typename VectorType::value_type>     d_vec;
 
-    const SparseMatrixType &mass_matrix;
-    const SparseMatrixType &laplace_matrix;
+    const MassLaplaceOperator &op;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -605,17 +918,12 @@ namespace TimeIntegrationSchemes
   class IRK : public IRKBase
   {
   public:
-    IRK(const MPI_Comm          comm,
-        const unsigned int      n_stages,
-        const SparseMatrixType &mass_matrix,
-        const SparseMatrixType &laplace_matrix,
+    IRK(const MPI_Comm             comm,
+        const unsigned int         n_stages,
+        const MassLaplaceOperator &op,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : IRKBase(comm,
-                n_stages,
-                mass_matrix,
-                laplace_matrix,
-                evaluate_rhs_function)
+      : IRKBase(comm, n_stages, op, evaluate_rhs_function)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -636,14 +944,13 @@ namespace TimeIntegrationSchemes
       if (system_matrix == nullptr)
         {
           this->system_matrix = std::make_unique<SystemMatrix>(
-            A_inv, time_step, mass_matrix, laplace_matrix, time_system_vmult);
+            A_inv, time_step, op, time_system_vmult);
           this->preconditioner =
             std::make_unique<Preconditioner>(d_vec,
                                              T,
                                              T_inv,
                                              time_step,
-                                             mass_matrix,
-                                             laplace_matrix,
+                                             op,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -666,7 +973,7 @@ namespace TimeIntegrationSchemes
         evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
                               system_rhs.block(i));
 
-      laplace_matrix.vmult(tmp, solution);
+      op.vmult(tmp, solution, 0.0, 1.0);
 
       for (unsigned int i = 0; i < n_stages; ++i)
         system_rhs.block(i).add(1.0, tmp);
@@ -735,14 +1042,12 @@ namespace TimeIntegrationSchemes
     public:
       SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
-                   const SparseMatrixType &mass_matrix,
-                   const SparseMatrixType &laplace_matrix,
-                   double &                time)
+                   const MassLaplaceOperator &                        op,
+                   double &                                           time)
         : n_stages(A_inv.m())
         , A_inv(A_inv)
         , time_step(time_step)
-        , mass_matrix(mass_matrix)
-        , laplace_matrix(laplace_matrix)
+        , op(op)
         , time(time)
       {}
 
@@ -758,15 +1063,13 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
             {
-              mass_matrix.vmult(tmp, src.block(j));
-              dst.block(i).add(A_inv(i, j), tmp);
-
-              if (i == j)
-                {
-                  laplace_matrix.vmult(tmp, src.block(j));
-                  dst.block(i).add(-time_step, tmp);
-                }
+              const unsigned int k = (j + i) % n_stages;
+              if (j == 0) // first process diagonal
+                op.vmult(dst.block(i), src.block(k), A_inv(i, k), -time_step);
+              else // proceed with off-diagonals
+                op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
             }
+
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::system_clock::now() - time)
@@ -777,8 +1080,7 @@ namespace TimeIntegrationSchemes
       const unsigned int                                 n_stages;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
-      const SparseMatrixType &                           mass_matrix;
-      const SparseMatrixType &                           laplace_matrix;
+      const MassLaplaceOperator &                        op;
 
       double &time;
     };
@@ -789,11 +1091,10 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double            time_step,
-                     const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix,
-                     double &                time_bc,
-                     double &                time_solver)
+                     const double               time_step,
+                     const MassLaplaceOperator &op,
+                     double &                   time_bc,
+                     double &                   time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , cut_off_tolerance(1e-12)
@@ -802,23 +1103,19 @@ namespace TimeIntegrationSchemes
         , T_mat(T)
         , T_mat_inv(T_inv)
         , tau(time_step)
-        , mass_matrix(mass_matrix)
-        , laplace_matrix(laplace_matrix)
+        , op(op)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
       {
-        operators.resize(n_stages);
         preconditioners.resize(n_stages);
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            operators[i].copy_from(laplace_matrix);
-            operators[i] *= -tau;
-            operators[i].add(d_vec[i], mass_matrix);
-
             TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-            preconditioners[i].initialize(operators[i], amg_data);
+
+            op.reinit(d_vec[i], -tau);
+            preconditioners[i].initialize(op.get_system_matrix(), amg_data);
           }
       }
 
@@ -847,7 +1144,9 @@ namespace TimeIntegrationSchemes
             SolverControl solver_control(n_max_iterations, abs_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
-            solver.solve(operators[i],
+            op.reinit(d_vec[i], -tau);
+
+            solver.solve(op,
                          tmp_vectors.block(i),
                          dst.block(i),
                          preconditioners[i]);
@@ -893,10 +1192,7 @@ namespace TimeIntegrationSchemes
 
       const double tau;
 
-      const SparseMatrixType &mass_matrix;
-      const SparseMatrixType &laplace_matrix;
-
-      std::vector<SparseMatrixType>                  operators;
+      const MassLaplaceOperator &                    op;
       std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
 
       double &time_bc;
@@ -924,18 +1220,13 @@ namespace TimeIntegrationSchemes
   public:
     using ReshapedVectorType = LinearAlgebra::ReshapedVector<VectorType>;
 
-    IRKStageParallel(const MPI_Comm          comm_global,
-                     const MPI_Comm          comm_row,
-                     const unsigned int      n_stages,
-                     const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix,
+    IRKStageParallel(const MPI_Comm             comm_global,
+                     const MPI_Comm             comm_row,
+                     const unsigned int         n_stages,
+                     const MassLaplaceOperator &op,
                      const std::function<void(const double, VectorType &)>
                        &evaluate_rhs_function)
-      : IRKBase(comm_global,
-                n_stages,
-                mass_matrix,
-                laplace_matrix,
-                evaluate_rhs_function)
+      : IRKBase(comm_global, n_stages, op, evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
@@ -958,15 +1249,14 @@ namespace TimeIntegrationSchemes
       if (system_matrix == nullptr)
         {
           this->system_matrix = std::make_unique<SystemMatrix>(
-            A_inv, time_step, mass_matrix, laplace_matrix, time_system_vmult);
+            A_inv, time_step, op, time_system_vmult);
           this->preconditioner =
             std::make_unique<Preconditioner>(comm_row,
                                              d_vec,
                                              T,
                                              T_inv,
                                              time_step,
-                                             mass_matrix,
-                                             laplace_matrix,
+                                             op,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -986,7 +1276,7 @@ namespace TimeIntegrationSchemes
       // setup right-hand-side vector
       evaluate_rhs_function(time + (c_vec[my_stage] - 1.0) * time_step,
                             system_rhs);
-      laplace_matrix.vmult(tmp, solution);
+      op.vmult(tmp, solution, 0.0, 1.0);
       system_rhs.add(1.0, tmp);
 
       // ... perform basis change
@@ -1111,13 +1401,11 @@ namespace TimeIntegrationSchemes
     public:
       SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
-                   const SparseMatrixType &mass_matrix,
-                   const SparseMatrixType &laplace_matrix,
-                   double &                time)
+                   const MassLaplaceOperator &                        op,
+                   double &                                           time)
         : A_inv(A_inv)
         , time_step(time_step)
-        , mass_matrix(mass_matrix)
-        , laplace_matrix(laplace_matrix)
+        , op(op)
         , time(time)
       {}
 
@@ -1135,15 +1423,15 @@ namespace TimeIntegrationSchemes
           [this,
            &temp](const auto i, const auto j, auto &dst, const auto &src) {
             if (i == j)
-              {
-                laplace_matrix.vmult(static_cast<VectorType &>(temp),
-                                     static_cast<const VectorType &>(src));
-                dst.equ(-time_step, temp);
-              }
-
-            mass_matrix.vmult(static_cast<VectorType &>(temp),
-                              static_cast<const VectorType &>(src));
-            dst.add(A_inv(i, j), temp);
+              op.vmult(static_cast<VectorType &>(dst),
+                       static_cast<const VectorType &>(src),
+                       A_inv(i, j),
+                       -time_step);
+            else
+              op.vmult_add(static_cast<VectorType &>(dst),
+                           static_cast<const VectorType &>(src),
+                           A_inv(i, j),
+                           0.0);
           });
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1154,8 +1442,7 @@ namespace TimeIntegrationSchemes
     private:
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
-      const SparseMatrixType &                           mass_matrix;
-      const SparseMatrixType &                           laplace_matrix;
+      const MassLaplaceOperator &                        op;
 
       double &time;
     };
@@ -1167,31 +1454,26 @@ namespace TimeIntegrationSchemes
                      const Vector<typename VectorType::value_type> &d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double            time_step,
-                     const SparseMatrixType &mass_matrix,
-                     const SparseMatrixType &laplace_matrix,
-                     double &                time_bc,
-                     double &                time_solver)
+                     const double               time_step,
+                     const MassLaplaceOperator &op,
+                     double &                   time_bc,
+                     double &                   time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
+        , my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , d_vec(d_vec)
         , T_mat(T)
         , T_mat_inv(T_inv)
         , tau(time_step)
-        , mass_matrix(mass_matrix)
-        , laplace_matrix(laplace_matrix)
+        , op(op)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
       {
-        const auto my_stage = Utilities::MPI::this_mpi_process(comm_row);
-
-        linear_operator.copy_from(laplace_matrix);
-        linear_operator *= -tau;
-        linear_operator.add(d_vec[my_stage], mass_matrix);
-
         TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        preconditioners.initialize(linear_operator, amg_data);
+
+        op.reinit(d_vec[my_stage], -tau);
+        preconditioners.initialize(op.get_system_matrix(), amg_data);
       }
 
       void
@@ -1213,7 +1495,9 @@ namespace TimeIntegrationSchemes
         SolverControl        solver_control(n_max_iterations, abs_tolerance);
         SolverCG<VectorType> solver(solver_control);
 
-        solver.solve(linear_operator,
+        op.reinit(d_vec[my_stage], -tau);
+
+        solver.solve(op,
                      static_cast<VectorType &>(temp),
                      static_cast<const VectorType &>(dst),
                      preconditioners);
@@ -1246,16 +1530,16 @@ namespace TimeIntegrationSchemes
       const unsigned int n_max_iterations;
       const double       abs_tolerance;
 
+      const unsigned int my_stage;
+
       const Vector<typename VectorType::value_type> &    d_vec;
       const FullMatrix<typename VectorType::value_type> &T_mat;
       const FullMatrix<typename VectorType::value_type> &T_mat_inv;
 
       const double tau;
 
-      const SparseMatrixType &mass_matrix;
-      const SparseMatrixType &laplace_matrix;
+      const MassLaplaceOperator &op;
 
-      SparseMatrixType                  linear_operator;
       TrilinosWrappers::PreconditionAMG preconditioners;
 
       double &time_bc;
@@ -1291,6 +1575,9 @@ namespace HeatEquation
 
     unsigned int irk_stages = 3;
 
+    std::string operator_type             = "MatrixBased";
+    std::string block_preconditioner_type = "AMG";
+
     bool do_output_paraview = false;
 
     void
@@ -1306,6 +1593,17 @@ namespace HeatEquation
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
+
+      prm.add_parameter("OperatorType",
+                        operator_type,
+                        "",
+                        Patterns::Selection("MatrixBased|MatrixFree"));
+      prm.add_parameter("BlockPreconditionerType",
+                        block_preconditioner_type,
+                        "",
+                        Patterns::Selection("AMG|GMG"));
+
+      prm.add_parameter("DoOutputParaview", do_output_paraview);
 
       std::ifstream file;
       file.open(file_name);
@@ -1344,12 +1642,24 @@ namespace HeatEquation
 
       setup_system();
 
-      double       time            = 0.0;
-      unsigned int timestep_number = 0;
+      // select operator
+      std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
 
-      VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
+      if (params.operator_type == "MatrixBased")
+        mass_laplace_operator =
+          std::make_unique<MassLaplaceOperatorMatrixBased>(dof_handler,
+                                                           constraints,
+                                                           quadrature);
+      else if (params.operator_type == "MatrixFree")
+        mass_laplace_operator =
+          std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
+            dof_handler, constraints, quadrature);
+      else
+        AssertThrow(false, ExcNotImplemented());
 
-      output_results(time, timestep_number);
+      // select time-integration scheme
+      std::unique_ptr<TimeIntegrationSchemes::Interface>
+        time_integration_scheme;
 
       const auto evaluate_rhs_function = [&](const double time,
                                              VectorType & tmp) -> void {
@@ -1359,20 +1669,15 @@ namespace HeatEquation
           dof_handler, quadrature, rhs_function, tmp, constraints);
       };
 
-      // select time-integration scheme
-      std::unique_ptr<TimeIntegrationSchemes::Interface>
-        time_integration_scheme;
-
       if (params.time_integration_scheme == "ost")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::OneStepTheta>(
-            comm_global, mass_matrix, laplace_matrix, evaluate_rhs_function);
+            comm_global, *mass_laplace_operator, evaluate_rhs_function);
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme =
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
                                                         params.irk_stages,
-                                                        mass_matrix,
-                                                        laplace_matrix,
+                                                        *mass_laplace_operator,
                                                         evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
@@ -1380,11 +1685,20 @@ namespace HeatEquation
             comm_global,
             comm_row,
             params.irk_stages,
-            mass_matrix,
-            laplace_matrix,
+            *mass_laplace_operator,
             evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
+
+      mass_laplace_operator->initialize_dof_vector(solution);
+      mass_laplace_operator->initialize_dof_vector(system_rhs);
+
+      double       time            = 0.0;
+      unsigned int timestep_number = 0;
+
+      VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
+
+      output_results(time, timestep_number);
 
       // perform time loop
       while (time <= params.end_time)
@@ -1439,56 +1753,6 @@ namespace HeatEquation
       // note: program is limited to homogenous DBCs
       DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
       constraints.close();
-
-      TrilinosWrappers::SparsityPattern sparsity_pattern(
-        dof_handler.locally_owned_dofs(), dof_handler.get_communicator());
-      DoFTools::make_sparsity_pattern(dof_handler,
-                                      sparsity_pattern,
-                                      constraints,
-                                      false);
-      sparsity_pattern.compress();
-
-      mass_matrix.reinit(sparsity_pattern);
-      laplace_matrix.reinit(sparsity_pattern);
-
-      MatrixCreator::create_mass_matrix(dof_handler,
-                                        quadrature,
-                                        mass_matrix,
-                                        constraints);
-      MatrixCreator::create_laplace_matrix(dof_handler,
-                                           quadrature,
-                                           laplace_matrix,
-                                           constraints);
-
-      this->initialize_dof_vector(solution);
-      system_rhs.reinit(system_rhs);
-    }
-
-    template <typename Number>
-    void
-    initialize_dof_vector(
-      LinearAlgebra::distributed::Vector<Number> &vec,
-      const unsigned int mg_level = numbers::invalid_unsigned_int)
-    {
-      IndexSet locally_relevant_dofs;
-
-      if (mg_level == numbers::invalid_unsigned_int)
-        DoFTools::extract_locally_relevant_dofs(dof_handler,
-                                                locally_relevant_dofs);
-      else
-        DoFTools::extract_locally_relevant_level_dofs(dof_handler,
-                                                      mg_level,
-                                                      locally_relevant_dofs);
-
-      const auto partitioner_dealii =
-        std::make_shared<const Utilities::MPI::Partitioner>(
-          mg_level == numbers::invalid_unsigned_int ?
-            dof_handler.locally_owned_dofs() :
-            dof_handler.locally_owned_mg_dofs(mg_level),
-          locally_relevant_dofs,
-          dof_handler.get_communicator());
-
-      vec.reinit(partitioner_dealii);
     }
 
     void
@@ -1632,7 +1896,7 @@ main(int argc, char **argv)
     {
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
-      constexpr unsigned int dim = 3;
+      constexpr unsigned int dim = 2;
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         {
