@@ -1634,7 +1634,7 @@ namespace TimeIntegrationSchemes
       if (system_matrix == nullptr)
         {
           this->system_matrix = std::make_unique<SystemMatrix>(
-            A_inv, time_step, op, time_system_vmult);
+            comm_row, A_inv, time_step, op, time_system_vmult);
           this->preconditioner =
             std::make_unique<Preconditioner>(comm_row,
                                              d_vec,
@@ -1785,11 +1785,13 @@ namespace TimeIntegrationSchemes
     class SystemMatrix
     {
     public:
-      SystemMatrix(const FullMatrix<typename VectorType::value_type> &A_inv,
+      SystemMatrix(const MPI_Comm &                                   comm_row,
+                   const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const MassLaplaceOperator &                        op,
                    double &                                           time)
-        : A_inv(A_inv)
+        : my_stage(Utilities::MPI::this_mpi_process(comm_row))
+        , A_inv(A_inv)
         , time_step(time_step)
         , op(op)
         , time(time)
@@ -1803,22 +1805,44 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp;
         temp.reinit(src);
 
-        matrix_vector_rol_operation<VectorType>(
-          dst,
-          src,
-          [this,
-           &temp](const auto i, const auto j, auto &dst, const auto &src) {
-            if (i == j)
-              op.vmult(static_cast<VectorType &>(dst),
-                       static_cast<const VectorType &>(src),
-                       A_inv(i, j),
-                       -time_step);
-            else
-              op.vmult_add(static_cast<VectorType &>(dst),
+        if (false)
+          {
+            matrix_vector_rol_operation<VectorType>(
+              dst,
+              src,
+              [this,
+               &temp](const auto i, const auto j, auto &dst, const auto &src) {
+                if (i == j)
+                  op.vmult(static_cast<VectorType &>(dst),
                            static_cast<const VectorType &>(src),
                            A_inv(i, j),
-                           0.0);
-          });
+                           -time_step);
+                else
+                  op.vmult_add(static_cast<VectorType &>(dst),
+                               static_cast<const VectorType &>(src),
+                               A_inv(i, j),
+                               0.0);
+              });
+          }
+        else
+          {
+            op.vmult(static_cast<VectorType &>(dst),
+                     static_cast<const VectorType &>(src),
+                     0.0,
+                     -time_step);
+            op.vmult(static_cast<VectorType &>(temp),
+                     static_cast<const VectorType &>(src),
+                     1.0,
+                     0.0);
+
+            matrix_vector_rol_operation<VectorType>(
+              dst,
+              temp,
+              [this,
+               &temp](const auto i, const auto j, auto &dst, const auto &src) {
+                dst.add(A_inv(i, j), src);
+              });
+          }
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::system_clock::now() - time)
@@ -1826,6 +1850,7 @@ namespace TimeIntegrationSchemes
       }
 
     private:
+      const unsigned int                                 my_stage;
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const MassLaplaceOperator &                        op;
