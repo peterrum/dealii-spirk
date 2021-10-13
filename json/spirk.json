@@ -4,6 +4,10 @@
     "TimeIntegrationScheme" : "spirk", 
     "IRKStages" : "3",
     "TimeStepSize" : "0.1",
-    "EndTime" : "0.5"
+    "EndTime" : "0.5",
+    "OperatorType" : "MatrixFree",
+    "BlockPreconditionerType" : "GMG",
+    "DoRowMajor" : true,
+    "Padding" : -1
 }
 
