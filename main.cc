@@ -54,6 +54,7 @@
 #include <deal.II/matrix_free/tools.h>
 
 #include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+#include <deal.II/multigrid/multigrid.h>
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
@@ -726,8 +727,18 @@ public:
     , mg_dof_handlers(mg_dof_handlers)
     , mg_constraints(mg_constraints)
     , mg_operators(mg_operators)
+    , min_level(mg_dof_handlers.min_level())
+    , max_level(mg_dof_handlers.max_level())
+    , transfers(min_level, max_level)
+    , transfer(transfers, [&](const auto l, auto &vec) {
+      this->mg_operators[l]->initialize_dof_vector(vec);
+    })
   {
-    AssertThrow(false, ExcNotImplemented());
+    for (auto l = min_level; l < max_level; ++l)
+      transfers[l + 1].reinit(*mg_dof_handlers[l + 1],
+                              *mg_dof_handlers[l],
+                              *mg_constraints[l + 1],
+                              *mg_constraints[l]);
   }
 
   virtual void
@@ -739,8 +750,7 @@ public:
   virtual void
   vmult(VectorType &dst, const VectorType &src) const override
   {
-    (void)dst;
-    (void)src;
+    preconditioner->vmult(dst, src);
   }
 
   virtual std::unique_ptr<const PreconditionerBase<VectorType>>
@@ -757,6 +767,17 @@ private:
   const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
     mg_constraints;
   const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>> mg_operators;
+
+  const unsigned int min_level;
+  const unsigned int max_level;
+
+  using MGTransferType = MGTransferGlobalCoarsening<dim, VectorType>;
+
+  MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
+  MGTransferType                                     transfer;
+
+  std::unique_ptr<PreconditionMG<dim, VectorType, MGTransferType>>
+    preconditioner;
 };
 
 
