@@ -53,6 +53,9 @@
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <deal.II/multigrid/mg_coarse.h>
+#include <deal.II/multigrid/mg_matrix.h>
+#include <deal.II/multigrid/mg_smoother.h>
 #include <deal.II/multigrid/mg_transfer_global_coarsening.h>
 #include <deal.II/multigrid/multigrid.h>
 
@@ -331,9 +334,11 @@ namespace dealii
 
 
 
-class MassLaplaceOperator
+class MassLaplaceOperator : public Subscriptor
 {
 public:
+  using Number = typename VectorType::value_type;
+
   MassLaplaceOperator()
     : mass_matrix_scaling(1.0)
     , laplace_matrix_scaling(1.0)
@@ -360,6 +365,26 @@ public:
     this->vmult(dst, src);
   }
 
+  types::global_dof_index
+  m() const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    return 0;
+  }
+
+  Number
+  el(unsigned int, unsigned int) const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    return 0.0;
+  }
+
+  void
+  Tvmult(VectorType &dst, const VectorType &src) const
+  {
+    this->vmult(dst, src);
+  }
+
   virtual void
   vmult(VectorType &dst, const VectorType &src) const = 0;
 
@@ -378,6 +403,13 @@ public:
 
   virtual const SparseMatrixType &
   get_system_matrix() const = 0;
+
+  void
+  compute_inverse_diagonal(VectorType &diagonal) const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)diagonal;
+  }
 
 protected:
   mutable double mass_matrix_scaling;
@@ -710,11 +742,28 @@ private:
 
 
 
+struct PreconditionerGMGAdditionalData
+{
+  double       smoothing_range               = 20;
+  unsigned int smoothing_degree              = 5;
+  unsigned int smoothing_eig_cg_n_iterations = 20;
+
+  unsigned int coarse_grid_smoother_sweeps = 1;
+  unsigned int coarse_grid_n_cycles        = 1;
+  std::string  coarse_grid_smoother_type   = "ILU";
+
+  unsigned int coarse_grid_maxiter = 1000;
+  double       coarse_grid_abstol  = 1e-20;
+  double       coarse_grid_reltol  = 1e-4;
+};
+
+
 template <int dim, typename VectorType>
 class PreconditionerGMG : public PreconditionerBase<VectorType>
 {
 public:
   PreconditionerGMG(
+    const DoFHandler<dim> &dof_handler,
     const std::vector<std::shared_ptr<const Triangulation<dim>>>
       &mg_triangulations,
     const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
@@ -723,7 +772,8 @@ public:
       &mg_constraints,
     const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
       &mg_operators)
-    : mg_triangulations(mg_triangulations)
+    : dof_handler(dof_handler)
+    , mg_triangulations(mg_triangulations)
     , mg_dof_handlers(mg_dof_handlers)
     , mg_constraints(mg_constraints)
     , mg_operators(mg_operators)
@@ -744,7 +794,58 @@ public:
   virtual void
   reinit() const override
   {
-    AssertThrow(false, ExcNotImplemented());
+    PreconditionerGMGAdditionalData additional_data;
+
+    mg_matrix = std::make_unique<mg::Matrix<VectorType>>(mg_operators);
+
+    // setup smoothers
+    MGLevelObject<typename SmootherType::AdditionalData> smoother_data(
+      min_level, max_level);
+
+    for (unsigned int level = min_level; level <= max_level; ++level)
+      {
+        smoother_data[level].preconditioner =
+          std::make_shared<SmootherPreconditionerType>();
+        mg_operators[level]->compute_inverse_diagonal(
+          smoother_data[level].preconditioner->get_vector());
+        smoother_data[level].smoothing_range = additional_data.smoothing_range;
+        smoother_data[level].degree          = additional_data.smoothing_degree;
+        smoother_data[level].eig_cg_n_iterations =
+          additional_data.smoothing_eig_cg_n_iterations;
+      }
+
+    mg_smoother.initialize(mg_operators, smoother_data);
+
+    // setup coarse-grid solver
+    coarse_grid_solver_control =
+      std::make_unique<ReductionControl>(additional_data.coarse_grid_maxiter,
+                                         additional_data.coarse_grid_abstol,
+                                         additional_data.coarse_grid_reltol,
+                                         false,
+                                         false);
+    coarse_grid_solver =
+      std::make_unique<SolverCG<VectorType>>(*coarse_grid_solver_control);
+
+    precondition_amg = std::make_unique<TrilinosWrappers::PreconditionAMG>();
+
+    TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+    amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
+    amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
+    amg_data.smoother_type = additional_data.coarse_grid_smoother_type.c_str();
+    precondition_amg->initialize(mg_operators[min_level]->get_system_matrix(),
+                                 amg_data);
+    mg_coarse = std::make_unique<
+      MGCoarseGridIterativeSolver<VectorType,
+                                  SolverCG<VectorType>,
+                                  LevelMatrixType,
+                                  TrilinosWrappers::PreconditionAMG>>(
+      *coarse_grid_solver, *mg_operators[min_level], *precondition_amg);
+
+    mg = std::make_unique<Multigrid<VectorType>>(
+      *mg_matrix, *mg_coarse, transfer, mg_smoother, mg_smoother);
+    preconditioner =
+      std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
+        dof_handler, *mg, transfer);
   }
 
   virtual void
@@ -757,10 +858,16 @@ public:
   clone() const override
   {
     return std::make_unique<PreconditionerGMG<dim, VectorType>>(
-      mg_triangulations, mg_dof_handlers, mg_constraints, mg_operators);
+      dof_handler,
+      mg_triangulations,
+      mg_dof_handlers,
+      mg_constraints,
+      mg_operators);
   }
 
 private:
+  const DoFHandler<dim> &dof_handler;
+
   const std::vector<std::shared_ptr<const Triangulation<dim>>>
                                                               mg_triangulations;
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
@@ -771,12 +878,33 @@ private:
   const unsigned int min_level;
   const unsigned int max_level;
 
-  using MGTransferType = MGTransferGlobalCoarsening<dim, VectorType>;
+  using LevelMatrixType = MassLaplaceOperator;
+  using MGTransferType  = MGTransferGlobalCoarsening<dim, VectorType>;
 
   MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
   MGTransferType                                     transfer;
 
-  std::unique_ptr<PreconditionMG<dim, VectorType, MGTransferType>>
+  using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
+  using SmootherType               = PreconditionChebyshev<LevelMatrixType,
+                                             VectorType,
+                                             SmootherPreconditionerType>;
+
+  mutable std::unique_ptr<mg::Matrix<VectorType>> mg_matrix;
+
+  mutable MGSmootherPrecondition<LevelMatrixType, SmootherType, VectorType>
+    mg_smoother;
+
+  mutable std::unique_ptr<ReductionControl> coarse_grid_solver_control;
+
+  mutable std::unique_ptr<SolverCG<VectorType>> coarse_grid_solver;
+
+  mutable std::unique_ptr<TrilinosWrappers::PreconditionAMG> precondition_amg;
+
+  mutable std::unique_ptr<MGCoarseGridBase<VectorType>> mg_coarse;
+
+  mutable std::unique_ptr<Multigrid<VectorType>> mg;
+
+  mutable std::unique_ptr<PreconditionMG<dim, VectorType, MGTransferType>>
     preconditioner;
 };
 
@@ -1870,7 +1998,11 @@ namespace HeatEquation
             }
 
           preconditioner = std::make_unique<PreconditionerGMG<dim, VectorType>>(
-            mg_triangulations, mg_dof_handlers, mg_constraints, mg_operators);
+            this->dof_handler,
+            mg_triangulations,
+            mg_dof_handlers,
+            mg_constraints,
+            mg_operators);
         }
       else
         AssertThrow(false, ExcNotImplemented());
