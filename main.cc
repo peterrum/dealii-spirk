@@ -365,19 +365,11 @@ public:
     this->vmult(dst, src);
   }
 
-  types::global_dof_index
-  m() const
-  {
-    AssertThrow(false, ExcNotImplemented());
-    return 0;
-  }
+  virtual types::global_dof_index
+  m() const = 0;
 
-  Number
-  el(unsigned int, unsigned int) const
-  {
-    AssertThrow(false, ExcNotImplemented());
-    return 0.0;
-  }
+  virtual Number
+  el(unsigned int, unsigned int) const = 0;
 
   void
   Tvmult(VectorType &dst, const VectorType &src) const
@@ -404,12 +396,8 @@ public:
   virtual const SparseMatrixType &
   get_system_matrix() const = 0;
 
-  void
-  compute_inverse_diagonal(VectorType &diagonal) const
-  {
-    AssertThrow(false, ExcNotImplemented());
-    (void)diagonal;
-  }
+  virtual void
+  compute_inverse_diagonal(VectorType &diagonal) const = 0;
 
 protected:
   mutable double mass_matrix_scaling;
@@ -454,6 +442,19 @@ public:
       dof_handler.locally_owned_dofs(),
       locally_relevant_dofs,
       dof_handler.get_communicator());
+  }
+
+  types::global_dof_index
+  m() const override
+  {
+    return mass_matrix.m();
+  }
+
+  Number
+  el(unsigned int i, unsigned int j) const
+  {
+    return mass_matrix_scaling * mass_matrix(i, j) +
+           laplace_matrix_scaling * laplace_matrix(i, j);
   }
 
   void
@@ -503,6 +504,13 @@ public:
       }
   }
 
+  void
+  compute_inverse_diagonal(VectorType &diagonal) const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)diagonal;
+  }
+
   const SparseMatrixType &
   get_system_matrix() const override
   {
@@ -539,6 +547,19 @@ public:
     data.mapping_update_flags = update_values | update_gradients;
     matrix_free.reinit(
       MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+  }
+
+  types::global_dof_index
+  m() const override
+  {
+    return matrix_free.get_dof_handler().n_dofs();
+  }
+
+  Number
+  el(unsigned int, unsigned int) const override
+  {
+    Assert(false, ExcNotImplemented());
+    return 0.0;
   }
 
   void
@@ -591,6 +612,18 @@ public:
       this);
 
     return system_matrix;
+  }
+
+  void
+  compute_inverse_diagonal(VectorType &diagonal) const override
+  {
+    MatrixFreeTools::compute_diagonal(
+      matrix_free,
+      diagonal,
+      &MassLaplaceOperatorMatrixFree::do_cell_integral,
+      this);
+    for (auto &i : diagonal)
+      i = (std::abs(i) > 1.0e-10) ? (1.0 / i) : 1.0;
   }
 
 
