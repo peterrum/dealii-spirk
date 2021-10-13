@@ -49,6 +49,9 @@
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/vector_memory.templates.h>
 
+#include <deal.II/matrix_free/fe_evaluation.h>
+#include <deal.II/matrix_free/matrix_free.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
 #include <deal.II/numerics/matrix_tools.h>
@@ -417,8 +420,6 @@ public:
       dof_handler.get_communicator());
   }
 
-
-
   void
   initialize_dof_vector(VectorType &vec) const override
   {
@@ -483,6 +484,54 @@ private:
   mutable std::shared_ptr<const Utilities::MPI::Partitioner> partitioner;
 
   mutable VectorType       tmp;
+  mutable SparseMatrixType tmp_matrix;
+};
+
+
+
+template <int dim, typename Number>
+class MassLaplaceOperatorMatrixFree : public MassLaplaceOperator
+{
+public:
+  MassLaplaceOperatorMatrixFree(const DoFHandler<dim> &          dof_handler,
+                                const AffineConstraints<Number> &constraints,
+                                const Quadrature<dim> &          quadrature)
+  {
+    (void)dof_handler;
+    (void)constraints;
+    (void)quadrature;
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
+  void
+  vmult(VectorType &dst, const VectorType &src) const override
+  {
+    (void)dst;
+    (void)src;
+  }
+
+  void
+  vmult_add(VectorType &dst, const VectorType &src) const override
+  {
+    (void)dst;
+    (void)src;
+  }
+
+  const SparseMatrixType &
+  get_system_matrix() const override
+  {
+    return tmp_matrix;
+  }
+
+
+private:
+  MatrixFree<dim, Number> matrix_free;
+
   mutable SparseMatrixType tmp_matrix;
 };
 
@@ -1487,20 +1536,16 @@ namespace HeatEquation
       std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
 
       if (params.operator_type == "MatrixBased")
-        {
-          mass_laplace_operator =
-            std::make_unique<MassLaplaceOperatorMatrixBased>(dof_handler,
-                                                             constraints,
-                                                             quadrature);
-        }
+        mass_laplace_operator =
+          std::make_unique<MassLaplaceOperatorMatrixBased>(dof_handler,
+                                                           constraints,
+                                                           quadrature);
       else if (params.operator_type == "MatrixFree")
-        {
-          AssertThrow(false, ExcNotImplemented());
-        }
+        mass_laplace_operator =
+          std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
+            dof_handler, constraints, quadrature);
       else
-        {
-          AssertThrow(false, ExcNotImplemented());
-        }
+        AssertThrow(false, ExcNotImplemented());
 
       // select time-integration scheme
       std::unique_ptr<TimeIntegrationSchemes::Interface>
