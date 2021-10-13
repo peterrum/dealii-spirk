@@ -1021,6 +1021,7 @@ namespace TimeIntegrationSchemes
                                              T_inv,
                                              time_step,
                                              op,
+                                             block_preconditioner,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -1161,10 +1162,11 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double               time_step,
-                     const MassLaplaceOperator &op,
-                     double &                   time_bc,
-                     double &                   time_solver)
+                     const double                          time_step,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &preconditioner,
+                     double &                              time_bc,
+                     double &                              time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , cut_off_tolerance(1e-12)
@@ -1182,10 +1184,10 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-
             op.reinit(d_vec[i], -tau);
-            preconditioners[i].initialize(op.get_system_matrix(), amg_data);
+
+            preconditioners[i] = preconditioner.clone();
+            preconditioners[i]->reinit();
           }
       }
 
@@ -1219,7 +1221,7 @@ namespace TimeIntegrationSchemes
             solver.solve(op,
                          tmp_vectors.block(i),
                          dst.block(i),
-                         preconditioners[i]);
+                         *preconditioners[i]);
 
             n_iterations += solver_control.last_step();
           }
@@ -1262,8 +1264,9 @@ namespace TimeIntegrationSchemes
 
       const double tau;
 
-      const MassLaplaceOperator &                    op;
-      std::vector<TrilinosWrappers::PreconditionAMG> preconditioners;
+      const MassLaplaceOperator &op;
+      std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+        preconditioners;
 
       double &time_bc;
       double &time_solver;
