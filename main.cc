@@ -863,9 +863,10 @@ namespace TimeIntegrationSchemes
   class IRKBase : public Interface
   {
   public:
-    IRKBase(const MPI_Comm             comm,
-            const unsigned int         n_stages,
-            const MassLaplaceOperator &op,
+    IRKBase(const MPI_Comm                        comm,
+            const unsigned int                    n_stages,
+            const MassLaplaceOperator &           op,
+            const PreconditionerBase<VectorType> &block_preconditioner,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
       : n_stages(n_stages)
@@ -876,6 +877,7 @@ namespace TimeIntegrationSchemes
       , c_vec(load_vector_from_file(n_stages, "c_vec_"))
       , d_vec(load_vector_from_file(n_stages, "D_vec_"))
       , op(op)
+      , block_preconditioner(block_preconditioner)
       , evaluate_rhs_function(evaluate_rhs_function)
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
@@ -961,7 +963,8 @@ namespace TimeIntegrationSchemes
     const Vector<typename VectorType::value_type>     c_vec;
     const Vector<typename VectorType::value_type>     d_vec;
 
-    const MassLaplaceOperator &op;
+    const MassLaplaceOperator &           op;
+    const PreconditionerBase<VectorType> &block_preconditioner;
 
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
@@ -984,12 +987,13 @@ namespace TimeIntegrationSchemes
   class IRK : public IRKBase
   {
   public:
-    IRK(const MPI_Comm             comm,
-        const unsigned int         n_stages,
-        const MassLaplaceOperator &op,
+    IRK(const MPI_Comm                        comm,
+        const unsigned int                    n_stages,
+        const MassLaplaceOperator &           op,
+        const PreconditionerBase<VectorType> &block_preconditioner,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
-      : IRKBase(comm, n_stages, op, evaluate_rhs_function)
+      : IRKBase(comm, n_stages, op, block_preconditioner, evaluate_rhs_function)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
     {}
@@ -1286,13 +1290,18 @@ namespace TimeIntegrationSchemes
   public:
     using ReshapedVectorType = LinearAlgebra::ReshapedVector<VectorType>;
 
-    IRKStageParallel(const MPI_Comm             comm_global,
-                     const MPI_Comm             comm_row,
-                     const unsigned int         n_stages,
-                     const MassLaplaceOperator &op,
+    IRKStageParallel(const MPI_Comm                        comm_global,
+                     const MPI_Comm                        comm_row,
+                     const unsigned int                    n_stages,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &block_preconditioner,
                      const std::function<void(const double, VectorType &)>
                        &evaluate_rhs_function)
-      : IRKBase(comm_global, n_stages, op, evaluate_rhs_function)
+      : IRKBase(comm_global,
+                n_stages,
+                op,
+                block_preconditioner,
+                evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
       , rel_tolerance(1e-8)
@@ -1323,6 +1332,7 @@ namespace TimeIntegrationSchemes
                                              T_inv,
                                              time_step,
                                              op,
+                                             block_preconditioner,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver);
         }
@@ -1520,10 +1530,11 @@ namespace TimeIntegrationSchemes
                      const Vector<typename VectorType::value_type> &d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double               time_step,
-                     const MassLaplaceOperator &op,
-                     double &                   time_bc,
-                     double &                   time_solver)
+                     const double                          time_step,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &preconditioners,
+                     double &                              time_bc,
+                     double &                              time_solver)
         : n_max_iterations(100)
         , abs_tolerance(1e-6)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
@@ -1532,14 +1543,13 @@ namespace TimeIntegrationSchemes
         , T_mat_inv(T_inv)
         , tau(time_step)
         , op(op)
+        , preconditioners(preconditioners)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
       {
-        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-
         op.reinit(d_vec[my_stage], -tau);
-        preconditioners.initialize(op.get_system_matrix(), amg_data);
+        preconditioners.reinit();
       }
 
       void
@@ -1606,7 +1616,7 @@ namespace TimeIntegrationSchemes
 
       const MassLaplaceOperator &op;
 
-      TrilinosWrappers::PreconditionAMG preconditioners;
+      const PreconditionerBase<VectorType> &preconditioners;
 
       double &time_bc;
       double &time_solver;
@@ -1760,6 +1770,7 @@ namespace HeatEquation
           std::make_unique<TimeIntegrationSchemes::IRK>(comm_global,
                                                         params.irk_stages,
                                                         *mass_laplace_operator,
+                                                        *preconditioner,
                                                         evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
@@ -1768,6 +1779,7 @@ namespace HeatEquation
             comm_row,
             params.irk_stages,
             *mass_laplace_operator,
+            *preconditioner,
             evaluate_rhs_function);
       else
         Assert(false, ExcNotImplemented());
