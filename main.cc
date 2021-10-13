@@ -914,8 +914,8 @@ public:
 private:
   const DoFHandler<dim> &dof_handler;
 
-  const std::vector<std::shared_ptr<const Triangulation<dim>>> &
-                                                              mg_triangulations;
+  const std::vector<std::shared_ptr<const Triangulation<dim>>>
+    &                                                         mg_triangulations;
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
   const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
     mg_constraints;
@@ -1984,9 +1984,8 @@ namespace HeatEquation
 
       // select preconditioner
       std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
-      
-      std::vector<std::shared_ptr<const Triangulation<dim>>>
-            mg_triangulations;
+
+      std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
 
       if (params.block_preconditioner_type == "AMG")
         {
@@ -1996,7 +1995,7 @@ namespace HeatEquation
       else if (params.block_preconditioner_type == "GMG")
         {
           mg_triangulations = MGTransferGlobalCoarseningTools::
-              create_geometric_coarsening_sequence(triangulation);
+            create_geometric_coarsening_sequence(triangulation);
 
           const unsigned int min_level = 0;
           const unsigned int max_level = mg_triangulations.size() - 1;
