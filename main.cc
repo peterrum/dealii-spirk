@@ -865,7 +865,7 @@ struct PreconditionerGMGAdditionalData
 };
 
 
-template <int dim, typename VectorType>
+template <int dim, typename LevelMatrixType, typename VectorType>
 class PreconditionerGMG : public PreconditionerBase<VectorType>
 {
 public:
@@ -876,9 +876,8 @@ public:
     const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
       &mg_dof_handlers,
     const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
-      &mg_constraints,
-    const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
-      &mg_operators)
+      &                                                          mg_constraints,
+    const MGLevelObject<std::shared_ptr<const LevelMatrixType>> &mg_operators)
     : dof_handler(dof_handler)
     , mg_triangulations(mg_triangulations)
     , mg_dof_handlers(mg_dof_handlers)
@@ -964,7 +963,8 @@ public:
   virtual std::unique_ptr<const PreconditionerBase<VectorType>>
   clone() const override
   {
-    return std::make_unique<PreconditionerGMG<dim, VectorType>>(
+    return std::make_unique<
+      PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
       dof_handler,
       mg_triangulations,
       mg_dof_handlers,
@@ -973,28 +973,26 @@ public:
   }
 
 private:
+  using MGTransferType = MGTransferGlobalCoarsening<dim, VectorType>;
+  using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
+  using SmootherType               = PreconditionChebyshev<LevelMatrixType,
+                                             VectorType,
+                                             SmootherPreconditionerType>;
+
   const DoFHandler<dim> &dof_handler;
 
   const std::vector<std::shared_ptr<const Triangulation<dim>>>
     &                                                         mg_triangulations;
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
   const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
-    mg_constraints;
-  const MGLevelObject<std::shared_ptr<const MassLaplaceOperator>> mg_operators;
+                                                              mg_constraints;
+  const MGLevelObject<std::shared_ptr<const LevelMatrixType>> mg_operators;
 
   const unsigned int min_level;
   const unsigned int max_level;
 
-  using LevelMatrixType = MassLaplaceOperator;
-  using MGTransferType  = MGTransferGlobalCoarsening<dim, VectorType>;
-
   MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
   MGTransferType                                     transfer;
-
-  using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
-  using SmootherType               = PreconditionChebyshev<LevelMatrixType,
-                                             VectorType,
-                                             SmootherPreconditionerType>;
 
   mutable std::unique_ptr<mg::Matrix<VectorType>> mg_matrix;
 
@@ -2182,7 +2180,8 @@ namespace HeatEquation
               mg_constraints[l]  = constraints;
             }
 
-          preconditioner = std::make_unique<PreconditionerGMG<dim, VectorType>>(
+          preconditioner = std::make_unique<
+            PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
             this->dof_handler,
             mg_triangulations,
             mg_dof_handlers,
