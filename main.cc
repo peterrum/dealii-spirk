@@ -228,7 +228,7 @@ namespace dealii
             {
               for (const auto i : fe_values.dof_indices())
                 for (const auto j : fe_values.dof_indices())
-                  cell_matrix(i, j) -=
+                  cell_matrix(i, j) +=
                     (fe_values.shape_grad(i, q) * fe_values.shape_grad(j, q) *
                      fe_values.JxW(q)); // TODO: make addition again
             }
@@ -546,7 +546,7 @@ public:
   void
   vmult_add(VectorType &dst, const VectorType &src) const override
   {
-    tmp.reinit(src, true);
+    tmp.reinit(src);
 
     if (mass_matrix_scaling == 0.0)
       {
@@ -566,7 +566,7 @@ public:
       {
         // nothing to do
       }
-    else if (laplace_matrix_scaling == 0.0)
+    else if (laplace_matrix_scaling == 1.0)
       {
         laplace_matrix.vmult_add(dst, src);
       }
@@ -580,8 +580,17 @@ public:
   void
   compute_inverse_diagonal(VectorType &diagonal) const override
   {
-    AssertThrow(false, ExcNotImplemented());
     (void)diagonal;
+
+#ifdef DEAL_II_WITH_TRILINOS
+    this->initialize_dof_vector(diagonal);
+    const auto &system_matrix = get_system_matrix();
+    for (auto entry : system_matrix)
+      if (entry.row() == entry.column() && std::abs(entry.value()) > 1e-10)
+        diagonal[entry.row()] = 1.0 / entry.value();
+#else
+    Assert(false, ExcNotImplemented());
+#endif
   }
 
   const SparseMatrixType &
@@ -732,7 +741,7 @@ private:
                                         integrator.get_value(q),
                                       q);
             if (laplace_matrix_scaling != 0.0)
-              integrator.submit_gradient(-laplace_matrix_scaling *
+              integrator.submit_gradient(laplace_matrix_scaling *
                                            integrator.get_gradient(q),
                                          q);
           }
@@ -764,7 +773,7 @@ private:
           integrator.submit_value(mass_matrix_scaling * integrator.get_value(q),
                                   q);
         if (laplace_matrix_scaling != 0.0)
-          integrator.submit_gradient(-laplace_matrix_scaling *
+          integrator.submit_gradient(laplace_matrix_scaling *
                                        integrator.get_gradient(q),
                                      q);
       }
@@ -1362,7 +1371,7 @@ namespace TimeIntegrationSchemes
         evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
                               system_rhs.block(i));
 
-      op.vmult(tmp, solution, 0.0, 1.0);
+      op.vmult(tmp, solution, 0.0, -1.0);
 
       for (unsigned int i = 0; i < n_stages; ++i)
         system_rhs.block(i).add(1.0, tmp);
@@ -1458,7 +1467,7 @@ namespace TimeIntegrationSchemes
                     op.vmult(dst.block(i),
                              src.block(k),
                              A_inv(i, k),
-                             -time_step);
+                             time_step);
                   else // proceed with off-diagonals
                     op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
                 }
@@ -1468,7 +1477,7 @@ namespace TimeIntegrationSchemes
             VectorType tmp;
             tmp.reinit(src.block(0));
             for (unsigned int i = 0; i < n_stages; ++i)
-              op.vmult(dst.block(i), src.block(i), 0.0, -time_step);
+              op.vmult(dst.block(i), src.block(i), 0.0, time_step);
 
             for (unsigned int i = 0; i < n_stages; ++i)
               {
@@ -1523,7 +1532,7 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            op.reinit(d_vec[i], -tau);
+            op.reinit(d_vec[i], tau);
 
             preconditioners[i] = preconditioner.clone();
             preconditioners[i]->reinit();
@@ -1555,7 +1564,7 @@ namespace TimeIntegrationSchemes
             SolverControl solver_control(n_max_iterations, abs_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
-            op.reinit(d_vec[i], -tau);
+            op.reinit(d_vec[i], tau);
 
             solver.solve(op,
                          tmp_vectors.block(i),
@@ -1701,7 +1710,7 @@ namespace TimeIntegrationSchemes
       // setup right-hand-side vector
       evaluate_rhs_function(time + (c_vec[my_stage] - 1.0) * time_step,
                             system_rhs);
-      op.vmult(tmp, solution, 0.0, 1.0);
+      op.vmult(tmp, solution, 0.0, -1.0);
       system_rhs.add(1.0, tmp);
 
       // ... perform basis change
@@ -1857,7 +1866,7 @@ namespace TimeIntegrationSchemes
                   op.vmult(static_cast<VectorType &>(dst),
                            static_cast<const VectorType &>(src),
                            A_inv(i, j),
-                           -time_step);
+                           time_step);
                 else
                   op.vmult_add(static_cast<VectorType &>(dst),
                                static_cast<const VectorType &>(src),
@@ -1870,7 +1879,7 @@ namespace TimeIntegrationSchemes
             op.vmult(static_cast<VectorType &>(dst),
                      static_cast<const VectorType &>(src),
                      0.0,
-                     -time_step);
+                     time_step);
             op.vmult(static_cast<VectorType &>(temp),
                      static_cast<const VectorType &>(src),
                      1.0,
@@ -1925,7 +1934,7 @@ namespace TimeIntegrationSchemes
         , time_solver(time_solver)
         , n_iterations(0)
       {
-        op.reinit(d_vec[my_stage], -tau);
+        op.reinit(d_vec[my_stage], tau);
         preconditioners.reinit();
       }
 
@@ -1948,7 +1957,7 @@ namespace TimeIntegrationSchemes
         SolverControl        solver_control(n_max_iterations, abs_tolerance);
         SolverCG<VectorType> solver(solver_control);
 
-        op.reinit(d_vec[my_stage], -tau);
+        op.reinit(d_vec[my_stage], tau);
 
         solver.solve(op,
                      static_cast<VectorType &>(temp),
