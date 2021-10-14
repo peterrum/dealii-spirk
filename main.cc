@@ -806,12 +806,12 @@ private:
 
 
 
-template <typename VectorType>
+template <typename MatrixType, typename VectorType>
 class PreconditionerAMG : public PreconditionerBase<VectorType>
 {
 public:
   PreconditionerAMG(
-    const MassLaplaceOperator &op,
+    const MatrixType &op,
     const typename TrilinosWrappers::PreconditionAMG::AdditionalData
       additional_data =
         typename TrilinosWrappers::PreconditionAMG::AdditionalData())
@@ -834,12 +834,12 @@ public:
   virtual std::unique_ptr<const PreconditionerBase<VectorType>>
   clone() const override
   {
-    return std::make_unique<PreconditionerAMG<VectorType>>(
+    return std::make_unique<PreconditionerAMG<MatrixType, VectorType>>(
       this->op, this->additional_data);
   }
 
 private:
-  const MassLaplaceOperator &op;
+  const MatrixType &op;
 
   const typename TrilinosWrappers::PreconditionAMG::AdditionalData
     additional_data;
@@ -865,21 +865,19 @@ struct PreconditionerGMGAdditionalData
 };
 
 
+
 template <int dim, typename LevelMatrixType, typename VectorType>
 class PreconditionerGMG : public PreconditionerBase<VectorType>
 {
 public:
   PreconditionerGMG(
     const DoFHandler<dim> &dof_handler,
-    const std::vector<std::shared_ptr<const Triangulation<dim>>>
-      &mg_triangulations,
     const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
       &mg_dof_handlers,
     const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
       &                                                          mg_constraints,
     const MGLevelObject<std::shared_ptr<const LevelMatrixType>> &mg_operators)
     : dof_handler(dof_handler)
-    , mg_triangulations(mg_triangulations)
     , mg_dof_handlers(mg_dof_handlers)
     , mg_constraints(mg_constraints)
     , mg_operators(mg_operators)
@@ -890,6 +888,7 @@ public:
       this->mg_operators[l]->initialize_dof_vector(vec);
     })
   {
+    // setup transfer operators
     for (auto l = min_level; l < max_level; ++l)
       transfers[l + 1].reinit(*mg_dof_handlers[l + 1],
                               *mg_dof_handlers[l],
@@ -902,9 +901,10 @@ public:
   {
     PreconditionerGMGAdditionalData additional_data;
 
+    // wrap level operators
     mg_matrix = std::make_unique<mg::Matrix<VectorType>>(mg_operators);
 
-    // setup smoothers
+    // setup smoothers on each level
     MGLevelObject<typename SmootherType::AdditionalData> smoother_data(
       min_level, max_level);
 
@@ -947,8 +947,12 @@ public:
                                   TrilinosWrappers::PreconditionAMG>>(
       *coarse_grid_solver, *mg_operators[min_level], *precondition_amg);
 
+    // create multigrid algorithm (put level operators, smoothers, transfer
+    // operators and smoothers together)
     mg = std::make_unique<Multigrid<VectorType>>(
       *mg_matrix, *mg_coarse, transfer, mg_smoother, mg_smoother);
+
+    // convert multigrid algorithm to preconditioner
     preconditioner =
       std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
         dof_handler, *mg, transfer);
@@ -964,12 +968,10 @@ public:
   clone() const override
   {
     return std::make_unique<
-      PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
-      dof_handler,
-      mg_triangulations,
-      mg_dof_handlers,
-      mg_constraints,
-      mg_operators);
+      PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(dof_handler,
+                                                               mg_dof_handlers,
+                                                               mg_constraints,
+                                                               mg_operators);
   }
 
 private:
@@ -981,8 +983,6 @@ private:
 
   const DoFHandler<dim> &dof_handler;
 
-  const std::vector<std::shared_ptr<const Triangulation<dim>>>
-    &                                                         mg_triangulations;
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
   const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
                                                               mg_constraints;
@@ -2125,7 +2125,8 @@ namespace HeatEquation
 
       if (params.block_preconditioner_type == "AMG")
         {
-          preconditioner = std::make_unique<PreconditionerAMG<VectorType>>(
+          preconditioner = std::make_unique<
+            PreconditionerAMG<MassLaplaceOperator, VectorType>>(
             *mass_laplace_operator);
         }
       else if (params.block_preconditioner_type == "GMG")
@@ -2182,11 +2183,7 @@ namespace HeatEquation
 
           preconditioner = std::make_unique<
             PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
-            this->dof_handler,
-            mg_triangulations,
-            mg_dof_handlers,
-            mg_constraints,
-            mg_operators);
+            this->dof_handler, mg_dof_handlers, mg_constraints, mg_operators);
         }
       else
         AssertThrow(false, ExcNotImplemented());
