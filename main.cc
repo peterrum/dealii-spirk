@@ -1218,6 +1218,19 @@ namespace TimeIntegrationSchemes
       table.set_scientific("time_preconditioner_solver", true);
     }
 
+  protected:
+    void
+    clear_timers() const
+    {
+      time_total                 = 0.0;
+      time_rhs                   = 0.0;
+      time_outer_solver          = 0.0;
+      time_solution_update       = 0.0;
+      time_system_vmult          = 0.0;
+      time_preconditioner_bc     = 0.0;
+      time_preconditioner_solver = 0.0;
+    }
+
   private:
     static FullMatrix<typename VectorType::value_type>
     load_matrix_from_file(const unsigned int n_stages, const std::string label)
@@ -1432,6 +1445,10 @@ namespace TimeIntegrationSchemes
       this->time_total += std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::system_clock::now() - time_total)
                             .count();
+
+      if (timestep_number == 1)
+        clear_timers(); // clear timers since preconditioner is setup in
+                        // first time step
     }
 
   private:
@@ -1771,6 +1788,10 @@ namespace TimeIntegrationSchemes
       this->time_total += std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::system_clock::now() - time_total)
                             .count();
+
+      if (timestep_number == 1)
+        clear_timers(); // clear timers since preconditioner is setup in
+                        // first time step
     }
 
   private:
