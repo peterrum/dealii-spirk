@@ -2494,7 +2494,7 @@ main(int argc, char **argv)
     {
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
-      constexpr unsigned int dim = 3;
+      constexpr unsigned int dim = IRK_DIMENSION;
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         {
