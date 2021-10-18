@@ -2394,6 +2394,7 @@ namespace HeatEquation
         : Function<dim>()
         , a_x(2.0)
         , a_y(2.0)
+        , a_z(2.0)
         , a_t(0.5)
       {}
 
@@ -2404,21 +2405,37 @@ namespace HeatEquation
         (void)component;
 
         const double x = p[0];
-        const double y = p[1];
+        const double y = dim >= 2 ? p[1] : 0.0;
+        const double z = dim >= 3 ? p[2] : 0.0;
         const double t = this->get_time();
 
-        return std::sin(a_x * numbers::PI * x) *
-               std::sin(a_y * numbers::PI * y) *
-               (numbers::PI * std::cos(numbers::PI * t) -
-                a_t * (std::sin(numbers::PI * t) + 1) +
-                (a_x * a_x + a_y * a_y) * numbers::PI * numbers::PI *
-                  (std::sin(numbers::PI * t) + 1)) *
-               std::exp(-a_t * t);
+        if (dim == 2)
+          return std::sin(a_x * numbers::PI * x) *
+                 std::sin(a_y * numbers::PI * y) *
+                 (numbers::PI * std::cos(numbers::PI * t) -
+                  a_t * (std::sin(numbers::PI * t) + 1) +
+                  (a_x * a_x + a_y * a_y) * numbers::PI * numbers::PI *
+                    (std::sin(numbers::PI * t) + 1)) *
+                 std::exp(-a_t * t);
+        else if (dim == 3)
+          return std::sin(a_x * numbers::PI * x) *
+                 std::sin(a_y * numbers::PI * y) *
+                 std::sin(a_z * numbers::PI * z) *
+                 (numbers::PI * std::cos(numbers::PI * t) -
+                  a_t * (std::sin(numbers::PI * t) + 1) +
+                  (a_x * a_x + a_y * a_y + a_z * a_z) * numbers::PI *
+                    numbers::PI * (std::sin(numbers::PI * t) + 1)) *
+                 std::exp(-a_t * t);
+
+        Assert(false, ExcNotImplemented());
+
+        return 0.0;
       }
 
     private:
       const double a_x;
       const double a_y;
+      const double a_z;
       const double a_t;
     };
 
@@ -2429,6 +2446,7 @@ namespace HeatEquation
         : Function<dim>(1, time)
         , a_x(2.0)
         , a_y(2.0)
+        , a_z(2.0)
         , a_t(0.5)
       {}
 
@@ -2439,17 +2457,29 @@ namespace HeatEquation
         (void)component;
 
         const double x = p[0];
-        const double y = p[1];
+        const double y = dim >= 2 ? p[1] : 0.0;
+        const double z = dim >= 3 ? p[2] : 0.0;
         const double t = this->get_time();
 
-        return std::sin(a_x * numbers::PI * x) *
-               std::sin(a_y * numbers::PI * y) *
-               (1 + std::sin(numbers::PI * t)) * std::exp(-a_t * t);
+        if (dim == 2)
+          return std::sin(a_x * numbers::PI * x) *
+                 std::sin(a_y * numbers::PI * y) *
+                 (1 + std::sin(numbers::PI * t)) * std::exp(-a_t * t);
+        else if (dim == 3)
+          return std::sin(a_x * numbers::PI * x) *
+                 std::sin(a_y * numbers::PI * y) *
+                 std::sin(a_z * numbers::PI * z) *
+                 (1 + std::sin(numbers::PI * t)) * std::exp(-a_t * t);
+
+        Assert(false, ExcNotImplemented());
+
+        return 0.0;
       }
 
     private:
       const double a_x;
       const double a_y;
+      const double a_z;
       const double a_t;
     };
   };
@@ -2464,7 +2494,7 @@ main(int argc, char **argv)
     {
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
 
-      constexpr unsigned int dim = 2;
+      constexpr unsigned int dim = IRK_DIMENSION;
 
       if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
         {
