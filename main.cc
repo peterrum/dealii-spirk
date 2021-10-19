@@ -958,8 +958,13 @@ public:
 
     // create multigrid algorithm (put level operators, smoothers, transfer
     // operators and smoothers together)
-    mg = std::make_unique<Multigrid<VectorType>>(
-      *mg_matrix, *mg_coarse, transfer, mg_smoother, mg_smoother);
+    mg = std::make_unique<Multigrid<VectorType>>(*mg_matrix,
+                                                 *mg_coarse,
+                                                 transfer,
+                                                 mg_smoother,
+                                                 mg_smoother,
+                                                 min_level,
+                                                 max_level);
 
     // convert multigrid algorithm to preconditioner
     preconditioner =
@@ -2164,7 +2169,8 @@ namespace HeatEquation
           mg_triangulations = MGTransferGlobalCoarseningTools::
             create_geometric_coarsening_sequence(triangulation);
 
-          const unsigned int min_level = 0;
+          // TODO: problem during setup of Chebyshev if coarse-grid has 0 DoFs
+          const unsigned int min_level = mg_triangulations.size() == 1 ? 0 : 1;
           const unsigned int max_level = mg_triangulations.size() - 1;
 
           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
