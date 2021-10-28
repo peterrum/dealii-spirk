@@ -149,102 +149,6 @@ namespace dealii
     };
   } // namespace LinearAlgebra
 
-  namespace MatrixCreator
-  {
-    template <int dim, int spacedim, typename number>
-    void
-    create_mass_matrix(const DoFHandler<dim, spacedim> &dof_handler,
-                       const Quadrature<dim> &          quad,
-                       SparseMatrixType &               matrix,
-                       const AffineConstraints<number> &constraints)
-    {
-      const auto &  fe = dof_handler.get_fe();
-      FEValues<dim> fe_values(
-        fe, quad, update_values | update_gradients | update_JxW_values);
-
-      FullMatrix<double>                   cell_matrix;
-      std::vector<types::global_dof_index> local_dof_indices;
-
-      // loop over all cells
-      for (const auto &cell : dof_handler.active_cell_iterators())
-        {
-          if (cell->is_locally_owned() == false)
-            continue;
-
-          fe_values.reinit(cell);
-
-          const unsigned int dofs_per_cell = cell->get_fe().dofs_per_cell;
-          cell_matrix.reinit(dofs_per_cell, dofs_per_cell);
-
-          // loop over cell dofs
-          for (const auto q : fe_values.quadrature_point_indices())
-            {
-              for (const auto i : fe_values.dof_indices())
-                for (const auto j : fe_values.dof_indices())
-                  cell_matrix(i, j) +=
-                    (fe_values.shape_value(i, q) * fe_values.shape_value(j, q) *
-                     fe_values.JxW(q));
-            }
-
-          local_dof_indices.resize(cell->get_fe().dofs_per_cell);
-          cell->get_dof_indices(local_dof_indices);
-
-          constraints.distribute_local_to_global(cell_matrix,
-                                                 local_dof_indices,
-                                                 matrix);
-        }
-
-      matrix.compress(VectorOperation::values::add);
-    }
-
-
-    template <int dim, int spacedim, typename number>
-    void
-    create_laplace_matrix(const DoFHandler<dim, spacedim> &dof_handler,
-                          const Quadrature<dim> &          quad,
-                          SparseMatrixType &               matrix,
-                          const AffineConstraints<number> &constraints)
-    {
-      const auto &  fe = dof_handler.get_fe();
-      FEValues<dim> fe_values(
-        fe, quad, update_values | update_gradients | update_JxW_values);
-
-      FullMatrix<double>                   cell_matrix;
-      std::vector<types::global_dof_index> local_dof_indices;
-
-      // loop over all cells
-      for (const auto &cell : dof_handler.active_cell_iterators())
-        {
-          if (cell->is_locally_owned() == false)
-            continue;
-
-          fe_values.reinit(cell);
-
-          const unsigned int dofs_per_cell = cell->get_fe().dofs_per_cell;
-          cell_matrix.reinit(dofs_per_cell, dofs_per_cell);
-
-          // loop over cell dofs
-          for (const auto q : fe_values.quadrature_point_indices())
-            {
-              for (const auto i : fe_values.dof_indices())
-                for (const auto j : fe_values.dof_indices())
-                  cell_matrix(i, j) +=
-                    (fe_values.shape_grad(i, q) * fe_values.shape_grad(j, q) *
-                     fe_values.JxW(q)); // TODO: make addition again
-            }
-
-          local_dof_indices.resize(cell->get_fe().dofs_per_cell);
-          cell->get_dof_indices(local_dof_indices);
-
-          constraints.distribute_local_to_global(cell_matrix,
-                                                 local_dof_indices,
-                                                 matrix);
-        }
-
-      matrix.compress(VectorOperation::values::add);
-    }
-  } // namespace MatrixCreator
-
   namespace Utilities
   {
     namespace MPI
@@ -498,14 +402,10 @@ public:
     mass_matrix.reinit(sparsity_pattern);
     laplace_matrix.reinit(sparsity_pattern);
 
-    MatrixCreator::create_mass_matrix(dof_handler,
-                                      quadrature,
-                                      mass_matrix,
-                                      constraints);
-    MatrixCreator::create_laplace_matrix(dof_handler,
-                                         quadrature,
-                                         laplace_matrix,
-                                         constraints);
+    MatrixCreator::create_mass_matrix<dim, dim, SparseMatrixType>(
+      dof_handler, quadrature, mass_matrix, nullptr, constraints);
+    MatrixCreator::create_laplace_matrix<dim, dim, SparseMatrixType>(
+      dof_handler, quadrature, laplace_matrix, nullptr, constraints);
 
     IndexSet locally_relevant_dofs;
 
