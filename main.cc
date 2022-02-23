@@ -231,13 +231,12 @@ namespace dealii
 
         unsigned int offset = 0;
 
-        const int ierr =
-          MPI_Exscan(&type_1,
-                     &offset,
-                     1,
-                     Utilities::MPI::internal::mpi_type_id(&offset),
-                     MPI_SUM,
-                     comm);
+        const int ierr = MPI_Exscan(&type_1,
+                                    &offset,
+                                    1,
+                                    Utilities::MPI::mpi_type_id(&offset),
+                                    MPI_SUM,
+                                    comm);
 
         AssertThrowMPI(ierr);
 
