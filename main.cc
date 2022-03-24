@@ -231,12 +231,13 @@ namespace dealii
 
         unsigned int offset = 0;
 
-        const int ierr = MPI_Exscan(&type_1,
-                                    &offset,
-                                    1,
-                                    Utilities::MPI::mpi_type_id(&offset),
-                                    MPI_SUM,
-                                    comm);
+        const int ierr =
+          MPI_Exscan(&type_1,
+                     &offset,
+                     1,
+                     Utilities::MPI::mpi_type_id_for_type<unsigned int>,
+                     MPI_SUM,
+                     comm);
 
         AssertThrowMPI(ierr);
 
@@ -598,7 +599,8 @@ public:
   void
   compute_inverse_diagonal(VectorType &diagonal) const override
   {
-    diagonal = 0.0;
+    this->initialize_dof_vector(diagonal);
+
     MatrixFreeTools::compute_diagonal(
       matrix_free,
       diagonal,
@@ -777,6 +779,8 @@ struct PreconditionerGMGAdditionalData
 template <int dim, typename LevelMatrixType, typename VectorType>
 class PreconditionerGMG : public PreconditionerBase<VectorType>
 {
+  using MGTransferType = MGTransferGlobalCoarsening<dim, VectorType>;
+
 public:
   PreconditionerGMG(
     const DoFHandler<dim> &dof_handler,
@@ -792,9 +796,6 @@ public:
     , min_level(mg_dof_handlers.min_level())
     , max_level(mg_dof_handlers.max_level())
     , transfers(min_level, max_level)
-    , transfer(transfers, [&](const auto l, auto &vec) {
-      this->mg_operators[l]->initialize_dof_vector(vec);
-    })
   {
     // setup transfer operators
     for (auto l = min_level; l < max_level; ++l)
@@ -802,6 +803,11 @@ public:
                               *mg_dof_handlers[l],
                               *mg_constraints[l + 1],
                               *mg_constraints[l]);
+
+    transfer =
+      std::make_unique<MGTransferType>(transfers, [&](const auto l, auto &vec) {
+        this->mg_operators[l]->initialize_dof_vector(vec);
+      });
   }
 
   virtual void
@@ -859,7 +865,7 @@ public:
     // operators and smoothers together)
     mg = std::make_unique<Multigrid<VectorType>>(*mg_matrix,
                                                  *mg_coarse,
-                                                 transfer,
+                                                 *transfer,
                                                  mg_smoother,
                                                  mg_smoother,
                                                  min_level,
@@ -868,7 +874,7 @@ public:
     // convert multigrid algorithm to preconditioner
     preconditioner =
       std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
-        dof_handler, *mg, transfer);
+        dof_handler, *mg, *transfer);
   }
 
   virtual void
@@ -888,7 +894,6 @@ public:
   }
 
 private:
-  using MGTransferType = MGTransferGlobalCoarsening<dim, VectorType>;
   using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
   using SmootherType               = PreconditionChebyshev<LevelMatrixType,
                                              VectorType,
@@ -905,7 +910,7 @@ private:
   const unsigned int max_level;
 
   MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
-  MGTransferType                                     transfer;
+  std::unique_ptr<MGTransferType>                    transfer;
 
   mutable std::unique_ptr<mg::Matrix<VectorType>> mg_matrix;
 
