@@ -2342,7 +2342,7 @@ namespace HeatEquation
 
       VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
 
-      double error = output_results(time, timestep_number);
+      auto error = output_results(time, timestep_number);
 
       double dx_local = std::numeric_limits<double>::max();
       for (const auto &cell : triangulation.active_cell_iterators())
@@ -2398,8 +2398,10 @@ namespace HeatEquation
       table.set_scientific("final_t", true);
       table.add_value("dt", time_step_size);
       table.set_scientific("dt", true);
-      table.add_value("error", error);
-      table.set_scientific("error", true);
+      table.add_value("error_L2", error.first);
+      table.set_scientific("error_L2", true);
+      table.add_value("error_Linf", error.second);
+      table.set_scientific("error_Linf", true);
 
       time_integration_scheme->get_statistics(table, timestep_number);
     }
@@ -2436,7 +2438,7 @@ namespace HeatEquation
       constraints.close();
     }
 
-    double
+    std::pair<double, double>
     output_results(const double time, const unsigned int timestep_number) const
     {
       if (params.do_output_paraview)
@@ -2468,14 +2470,27 @@ namespace HeatEquation
                                             norm_per_cell,
                                             QGauss<dim>(fe.degree + 2),
                                             VectorTools::L2_norm);
-          const double error_norm =
+          const double error_L2_norm =
             VectorTools::compute_global_error(triangulation,
                                               norm_per_cell,
                                               VectorTools::L2_norm);
-          pcout << "   Error in the L2 norm : " << error_norm << std::endl;
+
+          VectorTools::integrate_difference(dof_handler,
+                                            solution,
+                                            AnalyticalSolution(time),
+                                            norm_per_cell,
+                                            QGauss<dim>(fe.degree + 2),
+                                            VectorTools::Linfty_norm);
+          const double error_Linfty_norm =
+            VectorTools::compute_global_error(triangulation,
+                                              norm_per_cell,
+                                              VectorTools::Linfty_norm);
+
+          pcout << "   Error in the L2/L\u221E norm : " << error_L2_norm << "/"
+                << error_Linfty_norm << std::endl;
           solution.zero_out_ghost_values();
 
-          return error_norm;
+          return {error_L2_norm, error_Linfty_norm};
         }
     }
 
