@@ -1237,6 +1237,8 @@ namespace TimeIntegrationSchemes
   public:
     IRK(const MPI_Comm                        comm,
         const unsigned int                    n_stages,
+        const double                          outer_tolerance,
+        const double                          inner_tolerance,
         const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
         const PreconditionerBase<VectorType> &block_preconditioner,
@@ -1249,7 +1251,8 @@ namespace TimeIntegrationSchemes
                 block_preconditioner,
                 evaluate_rhs_function)
       , n_max_iterations(1000)
-      , rel_tolerance(1e-8)
+      , rel_tolerance(outer_tolerance)
+      , abs_tolerance(inner_tolerance)
     {}
 
     void
@@ -1277,6 +1280,7 @@ namespace TimeIntegrationSchemes
             std::make_unique<Preconditioner>(d_vec,
                                              T,
                                              T_inv,
+                                             abs_tolerance,
                                              time_step,
                                              op,
                                              block_preconditioner,
@@ -1451,13 +1455,14 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double                          abs_tolerance,
                      const double                          time_step,
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioner,
                      double &                              time_bc,
                      double &                              time_solver)
         : n_max_iterations(100)
-        , abs_tolerance(1e-6)
+        , abs_tolerance(abs_tolerance)
         , cut_off_tolerance(1e-12)
         , n_stages(d_vec.size())
         , d_vec(d_vec)
@@ -1565,6 +1570,7 @@ namespace TimeIntegrationSchemes
 
     const unsigned int n_max_iterations;
     const double       rel_tolerance;
+    const double       abs_tolerance;
 
     mutable double time_step = 0.0;
 
@@ -1584,6 +1590,8 @@ namespace TimeIntegrationSchemes
 
     IRKStageParallel(const MPI_Comm             comm_global,
                      const MPI_Comm             comm_row,
+                     const double               outer_tolerance,
+                     const double               inner_tolerance,
                      const unsigned int         n_stages,
                      const bool                 do_reduce_number_of_vmults,
                      const MassLaplaceOperator &op,
@@ -1598,7 +1606,8 @@ namespace TimeIntegrationSchemes
                 evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
-      , rel_tolerance(1e-8)
+      , rel_tolerance(outer_tolerance)
+      , abs_tolerance(inner_tolerance)
     {}
 
     void
@@ -1629,6 +1638,7 @@ namespace TimeIntegrationSchemes
                                              d_vec,
                                              T,
                                              T_inv,
+                                             abs_tolerance,
                                              time_step,
                                              op,
                                              block_preconditioner,
@@ -1866,13 +1876,14 @@ namespace TimeIntegrationSchemes
                      const Vector<typename VectorType::value_type> &d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double                          inner_tolerance,
                      const double                          time_step,
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioners,
                      double &                              time_bc,
                      double &                              time_solver)
         : n_max_iterations(100)
-        , abs_tolerance(1e-6)
+        , abs_tolerance(inner_tolerance)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , d_vec(d_vec)
         , T_mat(T)
@@ -1964,6 +1975,7 @@ namespace TimeIntegrationSchemes
 
     const unsigned int n_max_iterations;
     const double       rel_tolerance;
+    const double       abs_tolerance;
 
     mutable double time_step = 0.0;
 
@@ -1994,6 +2006,9 @@ namespace HeatEquation
     bool do_row_major = true;
     int  padding      = -1; // -1: no padding; 0: use sm;
                             // else valid: padding > irk_stages
+
+    double outer_tolerance = 1e-8;
+    double inner_tolerance = 1e-6;
 
     bool do_output_paraview = false;
 
@@ -2170,6 +2185,8 @@ namespace HeatEquation
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme = std::make_unique<TimeIntegrationSchemes::IRK>(
           comm_global,
+          params.outer_tolerance,
+          params.inner_tolerance,
           params.irk_stages,
           params.do_reduce_number_of_vmults,
           *mass_laplace_operator,
@@ -2180,6 +2197,8 @@ namespace HeatEquation
           std::make_unique<TimeIntegrationSchemes::IRKStageParallel>(
             comm_global,
             comm_row,
+            params.outer_tolerance,
+            params.inner_tolerance,
             params.irk_stages,
             params.do_reduce_number_of_vmults,
             *mass_laplace_operator,
