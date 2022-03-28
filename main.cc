@@ -2178,6 +2178,20 @@ namespace HeatEquation
 
       output_results(time, timestep_number);
 
+      double dx_local = std::numeric_limits<double>::max();
+      for (const auto &cell : triangulation.active_cell_iterators())
+        dx_local = std::min(dx_local, cell->minimum_vertex_distance());
+      const double dx = Utilities::MPI::min(dx_local, MPI_COMM_WORLD);
+
+      const double time_step_size =
+        (params.time_step_size > 0.0) ?
+          params.time_step_size :
+          std::pow(dx,
+                   (params.fe_degree + 1.0) / (2.0 * params.irk_stages - 1.0));
+
+      pcout << std::endl
+            << "Starting time loop with dt=" << time_step_size << std::endl;
+
       // perform time loop
       while (time <= params.end_time)
         {
@@ -2185,18 +2199,22 @@ namespace HeatEquation
                 << "Time step " << timestep_number << " at t=" << time
                 << std::endl;
 
-          time += params.time_step_size;
+          time += time_step_size;
           ++timestep_number;
 
           time_integration_scheme->solve(solution,
                                          timestep_number,
                                          time,
-                                         params.time_step_size);
+                                         time_step_size);
 
           constraints.distribute(solution);
 
           output_results(time, timestep_number);
         }
+
+      table.add_value("n_t", timestep_number);
+      table.add_value("dt", time_step_size);
+      table.set_scientific("dt", true);
 
       time_integration_scheme->get_statistics(table);
     }
