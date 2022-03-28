@@ -948,7 +948,8 @@ namespace TimeIntegrationSchemes
           const double       time_step) const = 0;
 
     virtual void
-    get_statistics(ConvergenceTable &table) const = 0;
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor) const = 0;
   };
 
 
@@ -1023,9 +1024,11 @@ namespace TimeIntegrationSchemes
     }
 
     void
-    get_statistics(ConvergenceTable &table) const override
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor) const override
     {
       (void)table;
+      (void)scaling_factor;
     }
 
   private:
@@ -1108,8 +1111,12 @@ namespace TimeIntegrationSchemes
     {}
 
     void
-    get_statistics(ConvergenceTable &table) const override
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
     {
+      table.add_value("n_outer", n_outer_iterations / scaling_factor);
+      table.add_value("n_inner", n_inner_iterations / n_outer_iterations);
+
       table.add_value("t", time_total / 1e9);
       table.set_scientific("t", true);
       table.add_value("t_rhs", time_rhs / 1e9);
@@ -1215,6 +1222,9 @@ namespace TimeIntegrationSchemes
     mutable double time_system_vmult          = 0.0;
     mutable double time_preconditioner_bc     = 0.0;
     mutable double time_preconditioner_solver = 0.0;
+
+    mutable double n_outer_iterations = 0;
+    mutable double n_inner_iterations = 0;
   };
 
 
@@ -1334,9 +1344,15 @@ namespace TimeIntegrationSchemes
           std::chrono::system_clock::now() - time_outer_solver)
           .count();
 
+      this->n_outer_iterations += solver_control.last_step();
+
+      const double n_inner_iterations =
+        preconditioner->get_n_iterations_and_clear();
+
+      this->n_inner_iterations += n_inner_iterations;
+
       pcout << "   " << solver_control.last_step()
-            << " outer FGMRES iterations and "
-            << preconditioner->get_n_iterations_and_clear()
+            << " outer FGMRES iterations and " << n_inner_iterations
             << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
@@ -1661,8 +1677,13 @@ namespace TimeIntegrationSchemes
           std::chrono::system_clock::now() - time_outer_solver)
           .count();
 
+      this->n_outer_iterations += solver_control.last_step();
+
       const double n_inner_iterations =
         preconditioner->get_n_iterations_and_clear();
+
+      this->n_inner_iterations += n_inner_iterations;
+
       const auto n_inner_iterations_min_max_avg =
         Utilities::MPI::min_max_avg(n_inner_iterations, comm_row);
 
@@ -2194,20 +2215,32 @@ namespace HeatEquation
       AssertThrow(time_step_size < params.end_time, ExcNotImplemented());
 
       // perform time loop
-      while (std::abs(time - params.end_time) > (1e-4 * time_step_size))
+      while ((params.end_time - time) > (1e-4 * time_step_size))
         {
           pcout << std::endl
                 << "Time step " << timestep_number << " at t=" << time
                 << std::endl;
 
-          const double time_old = time;
-          time = std::min(params.end_time, time_old + time_step_size);
+
+          double time_step_size_truncated = time_step_size;
+
+          if (time + time_step_size > params.end_time)
+            {
+              const double time_old    = time;
+              time                     = params.end_time;
+              time_step_size_truncated = time - time_old;
+            }
+          else
+            {
+              time += time_step_size;
+            }
+
           ++timestep_number;
 
           time_integration_scheme->solve(solution,
                                          timestep_number,
                                          time,
-                                         time - time_old);
+                                         time_step_size_truncated);
 
           constraints.distribute(solution);
 
@@ -2222,7 +2255,7 @@ namespace HeatEquation
       table.add_value("error", error);
       table.set_scientific("error", true);
 
-      time_integration_scheme->get_statistics(table);
+      time_integration_scheme->get_statistics(table, timestep_number);
     }
 
   private:
