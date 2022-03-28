@@ -2194,19 +2194,20 @@ namespace HeatEquation
       AssertThrow(time_step_size < params.end_time, ExcNotImplemented());
 
       // perform time loop
-      while (time <= params.end_time)
+      while (std::abs(time - params.end_time) > (1e-4 * time_step_size))
         {
           pcout << std::endl
                 << "Time step " << timestep_number << " at t=" << time
                 << std::endl;
 
-          time += time_step_size;
+          const double time_old = time;
+          time = std::min(params.end_time, time_old + time_step_size);
           ++timestep_number;
 
           time_integration_scheme->solve(solution,
                                          timestep_number,
                                          time,
-                                         time_step_size);
+                                         time - time_old);
 
           constraints.distribute(solution);
 
