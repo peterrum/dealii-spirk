@@ -1364,8 +1364,11 @@ namespace TimeIntegrationSchemes
     {
       (void)timestep_number;
 
-      AssertThrow((this->time_step == 0 || this->time_step == time_step),
-                  ExcNotImplemented());
+      if (this->time_step != time_step)
+        {
+          this->system_matrix.reset();
+          this->preconditioner.reset();
+        }
 
       this->time_step = time_step;
 
@@ -1732,8 +1735,11 @@ namespace TimeIntegrationSchemes
     {
       (void)timestep_number;
 
-      AssertThrow((this->time_step == 0 || this->time_step == time_step),
-                  ExcNotImplemented());
+      if (this->time_step != time_step)
+        {
+          this->system_matrix.reset();
+          this->preconditioner.reset();
+        }
 
       this->time_step = time_step;
 
@@ -2363,11 +2369,6 @@ namespace HeatEquation
       // perform time loop
       while ((params.end_time - time) > (1e-4 * time_step_size))
         {
-          pcout << std::endl
-                << "Time step " << timestep_number << " at t=" << time
-                << std::endl;
-
-
           double time_step_size_truncated = time_step_size;
 
           if (time + time_step_size > params.end_time)
@@ -2380,6 +2381,10 @@ namespace HeatEquation
             {
               time += time_step_size;
             }
+
+          pcout << std::endl
+                << "Time step " << timestep_number << " at t=" << time
+                << std::endl;
 
           ++timestep_number;
 
