@@ -1251,8 +1251,8 @@ namespace TimeIntegrationSchemes
                 block_preconditioner,
                 evaluate_rhs_function)
       , n_max_iterations(1000)
-      , rel_tolerance(outer_tolerance)
-      , abs_tolerance(inner_tolerance)
+      , outer_tolerance(outer_tolerance)
+      , innter_tolerance(inner_tolerance)
     {}
 
     void
@@ -1280,7 +1280,7 @@ namespace TimeIntegrationSchemes
             std::make_unique<Preconditioner>(d_vec,
                                              T,
                                              T_inv,
-                                             abs_tolerance,
+                                             innter_tolerance,
                                              time_step,
                                              op,
                                              block_preconditioner,
@@ -1336,7 +1336,7 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   rel_tolerance *
+                                   outer_tolerance *
                                      system_rhs.l2_norm() /*TODO*/);
 
       SolverFGMRES<BlockVectorType> cg(solver_control);
@@ -1455,14 +1455,14 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double                          abs_tolerance,
+                     const double                          innter_tolerance,
                      const double                          time_step,
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioner,
                      double &                              time_bc,
                      double &                              time_solver)
         : n_max_iterations(100)
-        , abs_tolerance(abs_tolerance)
+        , innter_tolerance(innter_tolerance)
         , cut_off_tolerance(1e-12)
         , n_stages(d_vec.size())
         , d_vec(d_vec)
@@ -1507,7 +1507,7 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            SolverControl solver_control(n_max_iterations, abs_tolerance);
+            SolverControl solver_control(n_max_iterations, innter_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
             op.reinit(d_vec[i], tau);
@@ -1548,7 +1548,7 @@ namespace TimeIntegrationSchemes
 
     private:
       const unsigned int n_max_iterations;
-      const double       abs_tolerance;
+      const double       innter_tolerance;
       const double       cut_off_tolerance;
 
       const unsigned int                                 n_stages;
@@ -1569,8 +1569,8 @@ namespace TimeIntegrationSchemes
     };
 
     const unsigned int n_max_iterations;
-    const double       rel_tolerance;
-    const double       abs_tolerance;
+    const double       outer_tolerance;
+    const double       innter_tolerance;
 
     mutable double time_step = 0.0;
 
@@ -1606,8 +1606,8 @@ namespace TimeIntegrationSchemes
                 evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
-      , rel_tolerance(outer_tolerance)
-      , abs_tolerance(inner_tolerance)
+      , outer_tolerance(outer_tolerance)
+      , innter_tolerance(inner_tolerance)
     {}
 
     void
@@ -1638,7 +1638,7 @@ namespace TimeIntegrationSchemes
                                              d_vec,
                                              T,
                                              T_inv,
-                                             abs_tolerance,
+                                             innter_tolerance,
                                              time_step,
                                              op,
                                              block_preconditioner,
@@ -1675,7 +1675,7 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   rel_tolerance *
+                                   outer_tolerance *
                                      system_rhs.l2_norm() /*TODO*/);
 
       SolverFGMRES<ReshapedVectorType> cg(solver_control);
@@ -1883,7 +1883,7 @@ namespace TimeIntegrationSchemes
                      double &                              time_bc,
                      double &                              time_solver)
         : n_max_iterations(100)
-        , abs_tolerance(inner_tolerance)
+        , innter_tolerance(inner_tolerance)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , d_vec(d_vec)
         , T_mat(T)
@@ -1915,7 +1915,7 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        SolverControl        solver_control(n_max_iterations, abs_tolerance);
+        SolverControl        solver_control(n_max_iterations, innter_tolerance);
         SolverCG<VectorType> solver(solver_control);
 
         op.reinit(d_vec[my_stage], tau);
@@ -1951,7 +1951,7 @@ namespace TimeIntegrationSchemes
 
     private:
       const unsigned int n_max_iterations;
-      const double       abs_tolerance;
+      const double       innter_tolerance;
 
       const unsigned int my_stage;
 
@@ -1974,8 +1974,8 @@ namespace TimeIntegrationSchemes
     const MPI_Comm comm_row;
 
     const unsigned int n_max_iterations;
-    const double       rel_tolerance;
-    const double       abs_tolerance;
+    const double       outer_tolerance;
+    const double       innter_tolerance;
 
     mutable double time_step = 0.0;
 
