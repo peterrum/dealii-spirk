@@ -1236,9 +1236,9 @@ namespace TimeIntegrationSchemes
   {
   public:
     IRK(const MPI_Comm                        comm,
-        const unsigned int                    n_stages,
-        const double                          outer_tolerance,
         const double                          inner_tolerance,
+        const double                          outer_tolerance,
+        const unsigned int                    n_stages,
         const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
         const PreconditionerBase<VectorType> &block_preconditioner,
@@ -1336,8 +1336,8 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   outer_tolerance *
-                                     system_rhs.l2_norm() /*TODO*/);
+                                   outer_tolerance * n_stages *
+                                     system_rhs.block(0).size());
 
       SolverFGMRES<BlockVectorType> cg(solver_control);
 
@@ -1675,8 +1675,8 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   outer_tolerance *
-                                     system_rhs.l2_norm() /*TODO*/);
+                                   outer_tolerance * n_stages *
+                                     system_rhs.size());
 
       SolverFGMRES<ReshapedVectorType> cg(solver_control);
 
