@@ -2175,7 +2175,7 @@ namespace HeatEquation
 
       VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
 
-      output_results(time, timestep_number);
+      double error = output_results(time, timestep_number);
 
       double dx_local = std::numeric_limits<double>::max();
       for (const auto &cell : triangulation.active_cell_iterators())
@@ -2190,6 +2190,8 @@ namespace HeatEquation
 
       pcout << std::endl
             << "Starting time loop with dt=" << time_step_size << std::endl;
+
+      AssertThrow(time_step_size < params.end_time, ExcNotImplemented());
 
       // perform time loop
       while (time <= params.end_time)
@@ -2208,12 +2210,16 @@ namespace HeatEquation
 
           constraints.distribute(solution);
 
-          output_results(time, timestep_number);
+          error = output_results(time, timestep_number);
         }
 
       table.add_value("n_t", timestep_number);
+      table.add_value("final_t", time);
+      table.set_scientific("final_t", true);
       table.add_value("dt", time_step_size);
       table.set_scientific("dt", true);
+      table.add_value("error", error);
+      table.set_scientific("error", true);
 
       time_integration_scheme->get_statistics(table);
     }
@@ -2250,7 +2256,7 @@ namespace HeatEquation
       constraints.close();
     }
 
-    void
+    double
     output_results(const double time, const unsigned int timestep_number) const
     {
       if (params.do_output_paraview)
@@ -2288,6 +2294,8 @@ namespace HeatEquation
                                               VectorTools::L2_norm);
           pcout << "   Error in the L2 norm : " << error_norm << std::endl;
           solution.zero_out_ghost_values();
+
+          return error_norm;
         }
     }
 
