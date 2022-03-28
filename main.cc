@@ -1236,8 +1236,8 @@ namespace TimeIntegrationSchemes
   {
   public:
     IRK(const MPI_Comm                        comm,
-        const double                          inner_tolerance,
         const double                          outer_tolerance,
+        const double                          inner_tolerance,
         const unsigned int                    n_stages,
         const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
