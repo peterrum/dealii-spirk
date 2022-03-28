@@ -1110,21 +1110,20 @@ namespace TimeIntegrationSchemes
     void
     get_statistics(ConvergenceTable &table) const override
     {
-      table.add_value("time", time_total / 1e9);
-      table.set_scientific("time", true);
-      table.add_value("time_rhs", time_rhs / 1e9);
-      table.set_scientific("time_rhs", true);
-      table.add_value("time_outer_solver", time_outer_solver / 1e9);
-      table.set_scientific("time_outer_solver", true);
-      table.add_value("time_solution_update", time_solution_update / 1e9);
-      table.set_scientific("time_solution_update", true);
-      table.add_value("time_system_vmult", time_system_vmult / 1e9);
-      table.set_scientific("time_system_vmult", true);
-      table.add_value("time_preconditioner_bc", time_preconditioner_bc / 1e9);
-      table.set_scientific("time_preconditioner_bc", true);
-      table.add_value("time_preconditioner_solver",
-                      time_preconditioner_solver / 1e9);
-      table.set_scientific("time_preconditioner_solver", true);
+      table.add_value("t", time_total / 1e9);
+      table.set_scientific("t", true);
+      table.add_value("t_rhs", time_rhs / 1e9);
+      table.set_scientific("t_rhs", true);
+      table.add_value("t_solver", time_outer_solver / 1e9);
+      table.set_scientific("t_solver", true);
+      table.add_value("t_update", time_solution_update / 1e9);
+      table.set_scientific("t_update", true);
+      table.add_value("t_vmult", time_system_vmult / 1e9);
+      table.set_scientific("t_vmult", true);
+      table.add_value("t_prec_bc", time_preconditioner_bc / 1e9);
+      table.set_scientific("t_prec_bc", true);
+      table.add_value("t_prec_solver", time_preconditioner_solver / 1e9);
+      table.set_scientific("t_prec_solver", true);
     }
 
   protected:
