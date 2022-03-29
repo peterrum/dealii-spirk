@@ -78,6 +78,107 @@ using SparseMatrixType = TrilinosWrappers::SparseMatrix;
 
 namespace dealii
 {
+  template <typename VectorType>
+  class SolverGCR : public SolverBase<VectorType>
+  {
+  public:
+    SolverGCR(SolverControl &solver_control, const unsigned int GCRmaxit = 40)
+      : SolverBase<VectorType>(solver_control)
+      , GCRmaxit(GCRmaxit)
+    {
+      H_vec.reserve(GCRmaxit);
+      Hd_vec.reserve(GCRmaxit);
+    }
+
+    template <typename MatrixType, typename PreconditionerType>
+    void
+    solve(const MatrixType &        A,
+          VectorType &              x,
+          const VectorType &        b,
+          const PreconditionerType &preconditioner)
+    {
+      using number = typename VectorType::value_type;
+
+      SolverControl::State conv = SolverControl::iterate;
+
+      search.reinit(x);
+      Asearch.reinit(x);
+      p.reinit(x);
+
+      preconditioner.vmult(search, b);
+      double res = search.l2_norm();
+
+      A.vmult(p, x);
+      p.add(-1., b);
+      preconditioner.vmult(search, p);
+
+      unsigned int it = 0;
+
+      conv = this->iteration_status(it, res, x);
+      if (conv != SolverControl::iterate)
+        return;
+
+      while (conv == SolverControl::iterate)
+        {
+          AssertIndexRange(it, GCRmaxit);
+
+          it++;
+
+          if (H_vec.size() < it)
+            {
+              H_vec.resize(H_vec.size() + 1);
+              Hd_vec.resize(Hd_vec.size() + 1);
+              Hn_preloc.resize(Hn_preloc.size() + 1);
+
+              H_vec.back().reinit(x);
+              Hd_vec.back().reinit(x);
+            }
+
+          A.vmult(Asearch, search);
+
+          for (unsigned int i = 0; i < it - 1; ++i)
+            {
+              const double temptest = (H_vec[i] * Asearch) / Hn_preloc[i];
+              Asearch.add(-temptest, H_vec[i]);
+              search.add(-temptest, Hd_vec[i]);
+            }
+
+          const double nAsearch_new = Asearch.norm_sqr();
+          Hn_preloc[it - 1]         = nAsearch_new;
+          H_vec[it - 1]             = Asearch;
+          Hd_vec[it - 1]            = search;
+
+          Assert(std::abs(nAsearch_new) != 0., ExcDivideByZero());
+
+          const double c_preloc = (Asearch * p) / nAsearch_new;
+          x.add(-c_preloc, search);
+          p.add(-c_preloc, Asearch);
+
+          preconditioner.vmult(search, p);
+
+          res = search.l2_norm();
+
+          conv = this->iteration_status(it, res, x);
+        }
+
+      if (conv != SolverControl::success)
+        AssertThrow(false, SolverControl::NoConvergence(it, res));
+    }
+
+  private:
+    const unsigned int GCRmaxit;
+
+    mutable VectorType search;
+    mutable VectorType Asearch;
+    mutable VectorType p;
+
+    mutable std::vector<typename VectorType::value_type> Hn_preloc;
+    mutable std::vector<VectorType>                      H_vec;
+    mutable std::vector<VectorType>                      Hd_vec;
+  };
+
+
+
   namespace LinearAlgebra
   {
     template <typename VT>
@@ -115,11 +216,17 @@ namespace dealii
         this->row_comm = row_comm;
       }
 
+      Number
+      norm_sqr() const
+      {
+        const Number temp = VT::l2_norm();
+        return Utilities::MPI::sum(temp * temp, row_comm);
+      }
+
       virtual Number
       l2_norm() const override
       {
-        const Number temp = VT::l2_norm();
-        return std::sqrt(Utilities::MPI::sum(temp * temp, row_comm));
+        return std::sqrt(norm_sqr());
       }
 
       virtual Number
@@ -948,7 +1055,8 @@ namespace TimeIntegrationSchemes
           const double       time_step) const = 0;
 
     virtual void
-    get_statistics(ConvergenceTable &table) const = 0;
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor) const = 0;
   };
 
 
@@ -1023,9 +1131,11 @@ namespace TimeIntegrationSchemes
     }
 
     void
-    get_statistics(ConvergenceTable &table) const override
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor) const override
     {
       (void)table;
+      (void)scaling_factor;
     }
 
   private:
@@ -1108,23 +1218,26 @@ namespace TimeIntegrationSchemes
     {}
 
     void
-    get_statistics(ConvergenceTable &table) const override
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
     {
-      table.add_value("time", time_total / 1e9);
-      table.set_scientific("time", true);
-      table.add_value("time_rhs", time_rhs / 1e9);
-      table.set_scientific("time_rhs", true);
-      table.add_value("time_outer_solver", time_outer_solver / 1e9);
-      table.set_scientific("time_outer_solver", true);
-      table.add_value("time_solution_update", time_solution_update / 1e9);
-      table.set_scientific("time_solution_update", true);
-      table.add_value("time_system_vmult", time_system_vmult / 1e9);
-      table.set_scientific("time_system_vmult", true);
-      table.add_value("time_preconditioner_bc", time_preconditioner_bc / 1e9);
-      table.set_scientific("time_preconditioner_bc", true);
-      table.add_value("time_preconditioner_solver",
-                      time_preconditioner_solver / 1e9);
-      table.set_scientific("time_preconditioner_solver", true);
+      table.add_value("n_outer", n_outer_iterations / scaling_factor);
+      table.add_value("n_inner", n_inner_iterations / n_outer_iterations);
+
+      table.add_value("t", time_total / 1e9);
+      table.set_scientific("t", true);
+      table.add_value("t_rhs", time_rhs / 1e9);
+      table.set_scientific("t_rhs", true);
+      table.add_value("t_solver", time_outer_solver / 1e9);
+      table.set_scientific("t_solver", true);
+      table.add_value("t_update", time_solution_update / 1e9);
+      table.set_scientific("t_update", true);
+      table.add_value("t_vmult", time_system_vmult / 1e9);
+      table.set_scientific("t_vmult", true);
+      table.add_value("t_prec_bc", time_preconditioner_bc / 1e9);
+      table.set_scientific("t_prec_bc", true);
+      table.add_value("t_prec_solver", time_preconditioner_solver / 1e9);
+      table.set_scientific("t_prec_solver", true);
     }
 
   protected:
@@ -1216,6 +1329,9 @@ namespace TimeIntegrationSchemes
     mutable double time_system_vmult          = 0.0;
     mutable double time_preconditioner_bc     = 0.0;
     mutable double time_preconditioner_solver = 0.0;
+
+    mutable double n_outer_iterations = 0;
+    mutable double n_inner_iterations = 0;
   };
 
 
@@ -1227,6 +1343,8 @@ namespace TimeIntegrationSchemes
   {
   public:
     IRK(const MPI_Comm                        comm,
+        const double                          outer_tolerance,
+        const double                          inner_tolerance,
         const unsigned int                    n_stages,
         const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
@@ -1240,7 +1358,8 @@ namespace TimeIntegrationSchemes
                 block_preconditioner,
                 evaluate_rhs_function)
       , n_max_iterations(1000)
-      , rel_tolerance(1e-8)
+      , outer_tolerance(outer_tolerance)
+      , inner_tolerance(inner_tolerance)
     {}
 
     void
@@ -1251,8 +1370,11 @@ namespace TimeIntegrationSchemes
     {
       (void)timestep_number;
 
-      AssertThrow((this->time_step == 0 || this->time_step == time_step),
-                  ExcNotImplemented());
+      if (this->time_step != time_step)
+        {
+          this->system_matrix.reset();
+          this->preconditioner.reset();
+        }
 
       this->time_step = time_step;
 
@@ -1268,6 +1390,7 @@ namespace TimeIntegrationSchemes
             std::make_unique<Preconditioner>(d_vec,
                                              T,
                                              T_inv,
+                                             inner_tolerance,
                                              time_step,
                                              op,
                                              block_preconditioner,
@@ -1323,21 +1446,46 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   rel_tolerance *
-                                     system_rhs.l2_norm() /*TODO*/);
+                                   outer_tolerance * n_stages *
+                                     system_rhs.block(0).size());
 
-      SolverFGMRES<BlockVectorType> cg(solver_control);
+      std::string solver_name = "";
 
-      cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
+      if (true)
+        {
+          solver_name = "GCR";
+
+          SolverGCR<BlockVectorType> cg(solver_control);
+          cg.solve(*system_matrix,
+                   system_solution,
+                   system_rhs,
+                   *preconditioner);
+        }
+      else
+        {
+          solver_name = "FGMRES";
+
+          SolverFGMRES<BlockVectorType> cg(solver_control);
+          cg.solve(*system_matrix,
+                   system_solution,
+                   system_rhs,
+                   *preconditioner);
+        }
 
       this->time_outer_solver +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::system_clock::now() - time_outer_solver)
           .count();
 
-      pcout << "   " << solver_control.last_step()
-            << " outer FGMRES iterations and "
-            << preconditioner->get_n_iterations_and_clear()
+      this->n_outer_iterations += solver_control.last_step();
+
+      const double n_inner_iterations =
+        preconditioner->get_n_iterations_and_clear();
+
+      this->n_inner_iterations += n_inner_iterations;
+
+      pcout << "   " << solver_control.last_step() << " outer " << solver_name
+            << " iterations and " << n_inner_iterations
             << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
@@ -1436,13 +1584,14 @@ namespace TimeIntegrationSchemes
       Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double                          inner_tolerance,
                      const double                          time_step,
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioner,
                      double &                              time_bc,
                      double &                              time_solver)
         : n_max_iterations(100)
-        , abs_tolerance(1e-6)
+        , inner_tolerance(inner_tolerance)
         , cut_off_tolerance(1e-12)
         , n_stages(d_vec.size())
         , d_vec(d_vec)
@@ -1487,7 +1636,7 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            SolverControl solver_control(n_max_iterations, abs_tolerance);
+            SolverControl solver_control(n_max_iterations, inner_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
             op.reinit(d_vec[i], tau);
@@ -1528,7 +1677,7 @@ namespace TimeIntegrationSchemes
 
     private:
       const unsigned int n_max_iterations;
-      const double       abs_tolerance;
+      const double       inner_tolerance;
       const double       cut_off_tolerance;
 
       const unsigned int                                 n_stages;
@@ -1549,7 +1698,8 @@ namespace TimeIntegrationSchemes
     };
 
     const unsigned int n_max_iterations;
-    const double       rel_tolerance;
+    const double       outer_tolerance;
+    const double       inner_tolerance;
 
     mutable double time_step = 0.0;
 
@@ -1569,6 +1719,8 @@ namespace TimeIntegrationSchemes
 
     IRKStageParallel(const MPI_Comm             comm_global,
                      const MPI_Comm             comm_row,
+                     const double               outer_tolerance,
+                     const double               inner_tolerance,
                      const unsigned int         n_stages,
                      const bool                 do_reduce_number_of_vmults,
                      const MassLaplaceOperator &op,
@@ -1583,7 +1735,8 @@ namespace TimeIntegrationSchemes
                 evaluate_rhs_function)
       , comm_row(comm_row)
       , n_max_iterations(1000)
-      , rel_tolerance(1e-8)
+      , outer_tolerance(outer_tolerance)
+      , inner_tolerance(inner_tolerance)
     {}
 
     void
@@ -1594,8 +1747,11 @@ namespace TimeIntegrationSchemes
     {
       (void)timestep_number;
 
-      AssertThrow((this->time_step == 0 || this->time_step == time_step),
-                  ExcNotImplemented());
+      if (this->time_step != time_step)
+        {
+          this->system_matrix.reset();
+          this->preconditioner.reset();
+        }
 
       this->time_step = time_step;
 
@@ -1614,6 +1770,7 @@ namespace TimeIntegrationSchemes
                                              d_vec,
                                              T,
                                              T_inv,
+                                             inner_tolerance,
                                              time_step,
                                              op,
                                              block_preconditioner,
@@ -1650,25 +1807,49 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   rel_tolerance *
-                                     system_rhs.l2_norm() /*TODO*/);
+                                   outer_tolerance * n_stages *
+                                     system_rhs.size());
 
-      SolverFGMRES<ReshapedVectorType> cg(solver_control);
+      std::string solver_name = "";
 
-      cg.solve(*system_matrix, system_solution, system_rhs, *preconditioner);
+      if (true)
+        {
+          solver_name = "GCR";
+
+          SolverGCR<ReshapedVectorType> cg(solver_control);
+          cg.solve(*system_matrix,
+                   system_solution,
+                   system_rhs,
+                   *preconditioner);
+        }
+      else
+        {
+          solver_name = "FGMRES";
+
+          SolverFGMRES<ReshapedVectorType> cg(solver_control);
+          cg.solve(*system_matrix,
+                   system_solution,
+                   system_rhs,
+                   *preconditioner);
+        }
 
       this->time_outer_solver +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::system_clock::now() - time_outer_solver)
           .count();
 
+      this->n_outer_iterations += solver_control.last_step();
+
       const double n_inner_iterations =
         preconditioner->get_n_iterations_and_clear();
+
+      this->n_inner_iterations += n_inner_iterations;
+
       const auto n_inner_iterations_min_max_avg =
         Utilities::MPI::min_max_avg(n_inner_iterations, comm_row);
 
-      pcout << "   " << solver_control.last_step()
-            << " outer FGMRES iterations and "
+      pcout << "   " << solver_control.last_step() << " outer " << solver_name
+            << " iterations and "
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.min)
             << "/" << n_inner_iterations_min_max_avg.avg << "/"
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.max)
@@ -1846,13 +2027,14 @@ namespace TimeIntegrationSchemes
                      const Vector<typename VectorType::value_type> &d_vec,
                      const FullMatrix<typename VectorType::value_type> &T,
                      const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double                          inner_tolerance,
                      const double                          time_step,
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioners,
                      double &                              time_bc,
                      double &                              time_solver)
         : n_max_iterations(100)
-        , abs_tolerance(1e-6)
+        , inner_tolerance(inner_tolerance)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , d_vec(d_vec)
         , T_mat(T)
@@ -1884,7 +2066,7 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        SolverControl        solver_control(n_max_iterations, abs_tolerance);
+        SolverControl        solver_control(n_max_iterations, inner_tolerance);
         SolverCG<VectorType> solver(solver_control);
 
         op.reinit(d_vec[my_stage], tau);
@@ -1920,7 +2102,7 @@ namespace TimeIntegrationSchemes
 
     private:
       const unsigned int n_max_iterations;
-      const double       abs_tolerance;
+      const double       inner_tolerance;
 
       const unsigned int my_stage;
 
@@ -1943,7 +2125,8 @@ namespace TimeIntegrationSchemes
     const MPI_Comm comm_row;
 
     const unsigned int n_max_iterations;
-    const double       rel_tolerance;
+    const double       outer_tolerance;
+    const double       inner_tolerance;
 
     mutable double time_step = 0.0;
 
@@ -1974,6 +2157,9 @@ namespace HeatEquation
     bool do_row_major = true;
     int  padding      = -1; // -1: no padding; 0: use sm;
                             // else valid: padding > irk_stages
+
+    double outer_tolerance = 1e-8;
+    double inner_tolerance = 1e-6;
 
     bool do_output_paraview = false;
 
@@ -2150,6 +2336,8 @@ namespace HeatEquation
       else if (params.time_integration_scheme == "irk")
         time_integration_scheme = std::make_unique<TimeIntegrationSchemes::IRK>(
           comm_global,
+          params.outer_tolerance,
+          params.inner_tolerance,
           params.irk_stages,
           params.do_reduce_number_of_vmults,
           *mass_laplace_operator,
@@ -2160,6 +2348,8 @@ namespace HeatEquation
           std::make_unique<TimeIntegrationSchemes::IRKStageParallel>(
             comm_global,
             comm_row,
+            params.outer_tolerance,
+            params.inner_tolerance,
             params.irk_stages,
             params.do_reduce_number_of_vmults,
             *mass_laplace_operator,
@@ -2176,29 +2366,67 @@ namespace HeatEquation
 
       VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
 
-      output_results(time, timestep_number);
+      auto error = output_results(time, timestep_number);
+
+      double dx_local = std::numeric_limits<double>::max();
+      for (const auto &cell : triangulation.active_cell_iterators())
+        dx_local = std::min(dx_local, cell->minimum_vertex_distance());
+      const double dx = Utilities::MPI::min(dx_local, comm_global);
+
+      const double time_step_size =
+        (params.time_step_size > 0.0) ?
+          params.time_step_size :
+          std::pow(dx,
+                   (params.fe_degree + 1.0) / (2.0 * params.irk_stages - 1.0));
+
+      pcout << std::endl
+            << "Starting time loop with dt=" << time_step_size << std::endl;
+
+      AssertThrow(time_step_size < params.end_time, ExcNotImplemented());
 
       // perform time loop
-      while (time <= params.end_time)
+      while ((params.end_time - time) > (1e-4 * time_step_size))
         {
+          double time_step_size_truncated = time_step_size;
+
+          if (time + time_step_size > params.end_time)
+            {
+              const double time_old    = time;
+              time                     = params.end_time;
+              time_step_size_truncated = time - time_old;
+            }
+          else
+            {
+              time += time_step_size;
+            }
+
           pcout << std::endl
                 << "Time step " << timestep_number << " at t=" << time
                 << std::endl;
 
-          time += params.time_step_size;
           ++timestep_number;
 
           time_integration_scheme->solve(solution,
                                          timestep_number,
                                          time,
-                                         params.time_step_size);
+                                         time_step_size_truncated);
 
           constraints.distribute(solution);
 
-          output_results(time, timestep_number);
+          error = output_results(time, timestep_number);
         }
 
-      time_integration_scheme->get_statistics(table);
+      table.add_value("n_t", timestep_number);
+      table.add_value("final_t", time);
+      table.set_scientific("final_t", true);
+      table.add_value("dt", time_step_size);
+      table.set_scientific("dt", true);
+      table.add_value("error_L2", error.first);
+      table.set_scientific("error_L2", true);
+      table.add_value("error_Linf", error.second);
+      table.set_scientific("error_Linf", true);
+
+      time_integration_scheme->get_statistics(table, timestep_number);
     }
 
   private:
@@ -2233,7 +2461,7 @@ namespace HeatEquation
       constraints.close();
     }
 
-    void
+    std::pair<double, double>
     output_results(const double time, const unsigned int timestep_number) const
     {
       if (params.do_output_paraview)
@@ -2265,12 +2493,27 @@ namespace HeatEquation
                                             norm_per_cell,
                                             QGauss<dim>(fe.degree + 2),
                                             VectorTools::L2_norm);
-          const double error_norm =
+          const double error_L2_norm =
             VectorTools::compute_global_error(triangulation,
                                               norm_per_cell,
                                               VectorTools::L2_norm);
-          pcout << "   Error in the L2 norm : " << error_norm << std::endl;
+
+          VectorTools::integrate_difference(dof_handler,
+                                            solution,
+                                            AnalyticalSolution(time),
+                                            norm_per_cell,
+                                            QGauss<dim>(fe.degree + 2),
+                                            VectorTools::Linfty_norm);
+          const double error_Linfty_norm =
+            VectorTools::compute_global_error(triangulation,
+                                              norm_per_cell,
+                                              VectorTools::Linfty_norm);
+
+          pcout << "   Error in the L2/L\u221E norm : " << error_L2_norm << "/"
+                << error_Linfty_norm << std::endl;
           solution.zero_out_ghost_values();
+
+          return {error_L2_norm, error_Linfty_norm};
         }
     }
 

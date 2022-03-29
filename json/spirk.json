@@ -1,9 +1,9 @@
 { 
-    "FEDegree" : 4,
-    "NRefinements" : 5,
+    "FEDegree" : 1,
+    "NRefinements" : 8,
     "TimeIntegrationScheme" : "spirk", 
-    "IRKStages" : "3",
-    "TimeStepSize" : "0.1",
+    "IRKStages" : "2",
+    "TimeStepSize" : "0.0",
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
     "BlockPreconditionerType" : "GMG",
