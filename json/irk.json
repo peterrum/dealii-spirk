@@ -1,8 +1,8 @@
 { 
-    "FEDegree" : 4,
-    "NRefinements" : 5,
+    "FEDegree" : 1,
+    "NRefinements" : 8,
     "TimeIntegrationScheme" : "irk", 
-    "IRKStages" : "3",
+    "IRKStages" : "2",
     "TimeStepSize" : "0.0",
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
