@@ -216,11 +216,17 @@ namespace dealii
         this->row_comm = row_comm;
       }
 
+      Number
+      norm_sqr() const
+      {
+        const Number temp = VT::l2_norm();
+        return Utilities::MPI::sum(temp * temp, row_comm);
+      }
+
       virtual Number
       l2_norm() const override
       {
-        const Number temp = VT::l2_norm();
-        return std::sqrt(Utilities::MPI::sum(temp * temp, row_comm));
+        return std::sqrt(norm_sqr());
       }
 
       virtual Number
@@ -1443,8 +1449,12 @@ namespace TimeIntegrationSchemes
                                    outer_tolerance * n_stages *
                                      system_rhs.block(0).size());
 
-      if (false)
+      std::string solver_name = "";
+
+      if (true)
         {
+          solver_name = "GCR";
+
           SolverGCR<BlockVectorType> cg(solver_control);
           cg.solve(*system_matrix,
                    system_solution,
@@ -1453,7 +1463,9 @@ namespace TimeIntegrationSchemes
         }
       else
         {
-          SolverGMRES<BlockVectorType> cg(solver_control);
+          solver_name = "FGMRES";
+
+          SolverFGMRES<BlockVectorType> cg(solver_control);
           cg.solve(*system_matrix,
                    system_solution,
                    system_rhs,
@@ -1472,8 +1484,8 @@ namespace TimeIntegrationSchemes
 
       this->n_inner_iterations += n_inner_iterations;
 
-      pcout << "   " << solver_control.last_step()
-            << " outer FGMRES iterations and " << n_inner_iterations
+      pcout << "   " << solver_control.last_step() << " outer " << solver_name
+            << " iterations and " << n_inner_iterations
             << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
@@ -1798,8 +1810,12 @@ namespace TimeIntegrationSchemes
                                    outer_tolerance * n_stages *
                                      system_rhs.size());
 
-      if (false)
+      std::string solver_name = "";
+
+      if (true)
         {
+          solver_name = "GCR";
+
           SolverGCR<ReshapedVectorType> cg(solver_control);
           cg.solve(*system_matrix,
                    system_solution,
@@ -1808,7 +1824,9 @@ namespace TimeIntegrationSchemes
         }
       else
         {
-          SolverGMRES<ReshapedVectorType> cg(solver_control);
+          solver_name = "FGMRES";
+
+          SolverFGMRES<ReshapedVectorType> cg(solver_control);
           cg.solve(*system_matrix,
                    system_solution,
                    system_rhs,
@@ -1830,8 +1848,8 @@ namespace TimeIntegrationSchemes
       const auto n_inner_iterations_min_max_avg =
         Utilities::MPI::min_max_avg(n_inner_iterations, comm_row);
 
-      pcout << "   " << solver_control.last_step()
-            << " outer FGMRES iterations and "
+      pcout << "   " << solver_control.last_step() << " outer " << solver_name
+            << " iterations and "
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.min)
             << "/" << n_inner_iterations_min_max_avg.avg << "/"
             << static_cast<unsigned int>(n_inner_iterations_min_max_avg.max)
