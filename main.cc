@@ -1209,7 +1209,8 @@ namespace TimeIntegrationSchemes
             const PreconditionerBase<VectorType> &block_preconditioner,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
-      : n_stages(n_stages)
+      : comm(comm)
+      , n_stages(n_stages)
       , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
       , T(load_matrix_from_file(n_stages, "T"))
@@ -1228,7 +1229,14 @@ namespace TimeIntegrationSchemes
                    const double      scaling_factor = 1.0) const override
     {
       table.add_value("n_outer", n_outer_iterations / scaling_factor);
-      table.add_value("n_inner", n_inner_iterations / n_outer_iterations);
+
+      const auto n_inner_iterations_min_max_avg =
+        Utilities::MPI::min_max_avg(n_inner_iterations / n_outer_iterations,
+                                    comm);
+
+      table.add_value("n_inner_min", n_inner_iterations_min_max_avg.min);
+      table.add_value("n_inner_avg", n_inner_iterations_min_max_avg.avg);
+      table.add_value("n_inner_max", n_inner_iterations_min_max_avg.max);
 
       table.add_value("t", time_total / 1e9);
       table.set_scientific("t", true);
@@ -1312,6 +1320,7 @@ namespace TimeIntegrationSchemes
     }
 
   protected:
+    const MPI_Comm     comm;
     const unsigned int n_stages;
     const bool         do_reduce_number_of_vmults;
     const FullMatrix<typename VectorType::value_type> A_inv;
