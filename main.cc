@@ -195,6 +195,8 @@ namespace dealii
         return *this;
       }
 
+      using VT::reinit;
+
       void
       reinit(const ReshapedVector<VT> &V)
       {
@@ -543,6 +545,8 @@ public:
     vec.reinit(partitioner);
   }
 
+  using MassLaplaceOperator::vmult;
+
   void
   vmult(VectorType &dst, const VectorType &src) const override
   {
@@ -656,6 +660,8 @@ public:
   {
     matrix_free.initialize_dof_vector(vec);
   }
+
+  using MassLaplaceOperator::vmult;
 
   void
   vmult(VectorType &dst, const VectorType &src) const override
