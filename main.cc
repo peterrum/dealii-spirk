@@ -177,7 +177,28 @@ namespace dealii
     mutable std::vector<VectorType>                      Hd_vec;
   };
 
+  class SPSolverControl : public SolverControl
+  {
+  public:
+    SPSolverControl(const MPI_Comm     comm,
+                    const unsigned int n           = 100,
+                    const double       tol         = 1.e-10,
+                    const bool         log_history = false,
+                    const bool         log_result  = true)
+      : SolverControl(n, tol, log_history, log_result)
+      , comm(comm)
+    {}
 
+
+    State
+    check(const unsigned int step, const double check_value) override
+    {
+      return SolverControl::check(step, Utilities::MPI::max(check_value, comm));
+    }
+
+  private:
+    const MPI_Comm comm;
+  };
 
   namespace LinearAlgebra
   {
@@ -2048,7 +2069,8 @@ namespace TimeIntegrationSchemes
                      const PreconditionerBase<VectorType> &preconditioners,
                      double &                              time_bc,
                      double &                              time_solver)
-        : n_max_iterations(100)
+        : comm_row(comm_row)
+        , n_max_iterations(100)
         , inner_tolerance(inner_tolerance)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , d_vec(d_vec)
@@ -2081,8 +2103,17 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        SolverControl        solver_control(n_max_iterations, inner_tolerance);
-        SolverCG<VectorType> solver(solver_control);
+        std::unique_ptr<SolverControl> solver_control;
+
+        if (true)
+          solver_control =
+            std::make_unique<SolverControl>(n_max_iterations, inner_tolerance);
+        else
+          solver_control = std::make_unique<SPSolverControl>(comm_row,
+                                                             n_max_iterations,
+                                                             inner_tolerance);
+
+        SolverCG<VectorType> solver(*solver_control);
 
         op.reinit(d_vec[my_stage], tau);
 
@@ -2091,7 +2122,7 @@ namespace TimeIntegrationSchemes
                      static_cast<const VectorType &>(dst),
                      preconditioners);
 
-        n_iterations += solver_control.last_step();
+        n_iterations += solver_control->last_step();
 
         this->time_solver +=
           std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2116,6 +2147,8 @@ namespace TimeIntegrationSchemes
       }
 
     private:
+      const MPI_Comm comm_row;
+
       const unsigned int n_max_iterations;
       const double       inner_tolerance;
 
