@@ -2177,6 +2177,9 @@ namespace HeatEquation
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
 
+      prm.add_parameter("OuterTolerance", outer_tolerance);
+      prm.add_parameter("InnerTolerance", inner_tolerance);
+
       prm.add_parameter("OperatorType",
                         operator_type,
                         "",
@@ -2705,11 +2708,11 @@ main(int argc, char **argv)
                                                     size_x,
                                                     padding);
 
-          const unsigned int size_v =
-            Utilities::MPI::n_mpi_processes(comm_global) / size_x;
-
           if (comm_global != MPI_COMM_NULL)
             {
+              const unsigned int size_v =
+                Utilities::MPI::n_mpi_processes(comm_global) / size_x;
+
               MPI_Comm comm_row = Utilities::MPI::create_row_comm(
                 comm_global, size_x, size_v, params.do_row_major);
               MPI_Comm comm_column = Utilities::MPI::create_column_comm(
