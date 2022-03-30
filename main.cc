@@ -177,7 +177,28 @@ namespace dealii
     mutable std::vector<VectorType>                      Hd_vec;
   };
 
+  class SPSolverControl : public SolverControl
+  {
+  public:
+    SPSolverControl(const MPI_Comm     comm,
+                    const unsigned int n           = 100,
+                    const double       tol         = 1.e-10,
+                    const bool         log_history = false,
+                    const bool         log_result  = true)
+      : SolverControl(n, tol, log_history, log_result)
+      , comm(comm)
+    {}
 
+
+    State
+    check(const unsigned int step, const double check_value) override
+    {
+      return SolverControl::check(step, Utilities::MPI::max(check_value, comm));
+    }
+
+  private:
+    const MPI_Comm comm;
+  };
 
   namespace LinearAlgebra
   {
@@ -194,6 +215,8 @@ namespace dealii
 
         return *this;
       }
+
+      using VT::reinit;
 
       void
       reinit(const ReshapedVector<VT> &V)
@@ -543,6 +566,8 @@ public:
     vec.reinit(partitioner);
   }
 
+  using MassLaplaceOperator::vmult;
+
   void
   vmult(VectorType &dst, const VectorType &src) const override
   {
@@ -656,6 +681,8 @@ public:
   {
     matrix_free.initialize_dof_vector(vec);
   }
+
+  using MassLaplaceOperator::vmult;
 
   void
   vmult(VectorType &dst, const VectorType &src) const override
@@ -1203,7 +1230,8 @@ namespace TimeIntegrationSchemes
             const PreconditionerBase<VectorType> &block_preconditioner,
             const std::function<void(const double, VectorType &)>
               &evaluate_rhs_function)
-      : n_stages(n_stages)
+      : comm(comm)
+      , n_stages(n_stages)
       , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
       , T(load_matrix_from_file(n_stages, "T"))
@@ -1222,7 +1250,14 @@ namespace TimeIntegrationSchemes
                    const double      scaling_factor = 1.0) const override
     {
       table.add_value("n_outer", n_outer_iterations / scaling_factor);
-      table.add_value("n_inner", n_inner_iterations / n_outer_iterations);
+
+      const auto n_inner_iterations_min_max_avg =
+        Utilities::MPI::min_max_avg(n_inner_iterations / n_outer_iterations,
+                                    comm);
+
+      table.add_value("n_inner_min", n_inner_iterations_min_max_avg.min);
+      table.add_value("n_inner_avg", n_inner_iterations_min_max_avg.avg);
+      table.add_value("n_inner_max", n_inner_iterations_min_max_avg.max);
 
       table.add_value("t", time_total / 1e9);
       table.set_scientific("t", true);
@@ -1261,7 +1296,11 @@ namespace TimeIntegrationSchemes
 
       std::string file_name = label + std::to_string(n_stages) + ".txt";
 
-      std::ifstream fin(file_name);
+      std::ifstream fin;
+      fin.open(file_name);
+
+      if (fin.fail())
+        fin.open("../" + file_name);
 
       AssertThrow(fin.fail() == false,
                   ExcMessage("File with the name " + file_name +
@@ -1287,7 +1326,11 @@ namespace TimeIntegrationSchemes
 
       std::string file_name = label + std::to_string(n_stages) + ".txt";
 
-      std::ifstream fin(file_name);
+      std::ifstream fin;
+      fin.open(file_name);
+
+      if (fin.fail())
+        fin.open("../" + file_name);
 
       AssertThrow(fin.fail() == false,
                   ExcMessage("File with the name " + file_name +
@@ -1306,6 +1349,7 @@ namespace TimeIntegrationSchemes
     }
 
   protected:
+    const MPI_Comm     comm;
     const unsigned int n_stages;
     const bool         do_reduce_number_of_vmults;
     const FullMatrix<typename VectorType::value_type> A_inv;
@@ -2033,7 +2077,8 @@ namespace TimeIntegrationSchemes
                      const PreconditionerBase<VectorType> &preconditioners,
                      double &                              time_bc,
                      double &                              time_solver)
-        : n_max_iterations(100)
+        : comm_row(comm_row)
+        , n_max_iterations(100)
         , inner_tolerance(inner_tolerance)
         , my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , d_vec(d_vec)
@@ -2066,8 +2111,17 @@ namespace TimeIntegrationSchemes
         ReshapedVectorType temp; // TODO
         temp.reinit(src);        //
 
-        SolverControl        solver_control(n_max_iterations, inner_tolerance);
-        SolverCG<VectorType> solver(solver_control);
+        std::unique_ptr<SolverControl> solver_control;
+
+        if (true)
+          solver_control =
+            std::make_unique<SolverControl>(n_max_iterations, inner_tolerance);
+        else
+          solver_control = std::make_unique<SPSolverControl>(comm_row,
+                                                             n_max_iterations,
+                                                             inner_tolerance);
+
+        SolverCG<VectorType> solver(*solver_control);
 
         op.reinit(d_vec[my_stage], tau);
 
@@ -2076,7 +2130,7 @@ namespace TimeIntegrationSchemes
                      static_cast<const VectorType &>(dst),
                      preconditioners);
 
-        n_iterations += solver_control.last_step();
+        n_iterations += solver_control->last_step();
 
         this->time_solver +=
           std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2101,6 +2155,8 @@ namespace TimeIntegrationSchemes
       }
 
     private:
+      const MPI_Comm comm_row;
+
       const unsigned int n_max_iterations;
       const double       inner_tolerance;
 
@@ -2176,6 +2232,9 @@ namespace HeatEquation
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
+
+      prm.add_parameter("OuterTolerance", outer_tolerance);
+      prm.add_parameter("InnerTolerance", inner_tolerance);
 
       prm.add_parameter("OperatorType",
                         operator_type,
@@ -2445,7 +2504,16 @@ namespace HeatEquation
 
       table.add_value("n_levels", triangulation.n_global_levels());
       table.add_value("n_cells", triangulation.n_global_active_cells());
+      table.add_value("fe_degree", fe.degree);
       table.add_value("n_dofs", dof_handler.n_dofs());
+      table.add_value("n_stages", params.irk_stages);
+      table.add_value("n_procs",
+                      Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+      table.add_value("n_procs_global",
+                      Utilities::MPI::n_mpi_processes(comm_global));
+      table.add_value("n_procs_row", Utilities::MPI::n_mpi_processes(comm_row));
+      table.add_value("n_procs_column",
+                      Utilities::MPI::n_mpi_processes(comm_column));
 
       constraints.clear();
 
@@ -2705,11 +2773,11 @@ main(int argc, char **argv)
                                                     size_x,
                                                     padding);
 
-          const unsigned int size_v =
-            Utilities::MPI::n_mpi_processes(comm_global) / size_x;
-
           if (comm_global != MPI_COMM_NULL)
             {
+              const unsigned int size_v =
+                Utilities::MPI::n_mpi_processes(comm_global) / size_x;
+
               MPI_Comm comm_row = Utilities::MPI::create_row_comm(
                 comm_global, size_x, size_v, params.do_row_major);
               MPI_Comm comm_column = Utilities::MPI::create_column_comm(
