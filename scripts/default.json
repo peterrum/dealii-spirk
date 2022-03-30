@@ -1,0 +1,14 @@
+{ 
+    "FEDegree" : 1,
+    "NRefinements" : 8,
+    "TimeIntegrationScheme" : "spirk", 
+    "IRKStages" : "9",
+    "OuterTolerance" : "1e-8",
+    "InnerTolerance" : "1e-6",
+    "TimeStepSize" : "0.0",
+    "EndTime" : "1.0",
+    "OperatorType" : "MatrixFree",
+    "BlockPreconditionerType" : "GMG",
+    "DoRowMajor" : true,
+    "Padding" : -1
+}
