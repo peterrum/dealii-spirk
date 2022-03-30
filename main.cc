@@ -2507,6 +2507,13 @@ namespace HeatEquation
       table.add_value("fe_degree", fe.degree);
       table.add_value("n_dofs", dof_handler.n_dofs());
       table.add_value("n_stages", params.irk_stages);
+      table.add_value("n_procs",
+                      Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+      table.add_value("n_procs_global",
+                      Utilities::MPI::n_mpi_processes(comm_global));
+      table.add_value("n_procs_row", Utilities::MPI::n_mpi_processes(comm_row));
+      table.add_value("n_procs_column",
+                      Utilities::MPI::n_mpi_processes(comm_column));
 
       constraints.clear();
 
