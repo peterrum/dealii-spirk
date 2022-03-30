@@ -1296,7 +1296,11 @@ namespace TimeIntegrationSchemes
 
       std::string file_name = label + std::to_string(n_stages) + ".txt";
 
-      std::ifstream fin(file_name);
+      std::ifstream fin;
+      fin.open(file_name);
+
+      if (fin.fail())
+        fin.open("../" + file_name);
 
       AssertThrow(fin.fail() == false,
                   ExcMessage("File with the name " + file_name +
@@ -1322,7 +1326,11 @@ namespace TimeIntegrationSchemes
 
       std::string file_name = label + std::to_string(n_stages) + ".txt";
 
-      std::ifstream fin(file_name);
+      std::ifstream fin;
+      fin.open(file_name);
+
+      if (fin.fail())
+        fin.open("../" + file_name);
 
       AssertThrow(fin.fail() == false,
                   ExcMessage("File with the name " + file_name +
