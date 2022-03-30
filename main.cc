@@ -2504,7 +2504,9 @@ namespace HeatEquation
 
       table.add_value("n_levels", triangulation.n_global_levels());
       table.add_value("n_cells", triangulation.n_global_active_cells());
+      table.add_value("fe_degree", fe.degree);
       table.add_value("n_dofs", dof_handler.n_dofs());
+      table.add_value("n_stages", params.irk_stages);
 
       constraints.clear();
 
