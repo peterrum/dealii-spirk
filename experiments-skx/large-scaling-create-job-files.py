@@ -17,7 +17,7 @@ cmd = """#!/bin/bash
 #SBATCH --mail-type=END
 #SBATCH --mail-user=peter.muench@tum.de
 # Wall clock limit:
-#SBATCH --time=1:00:00
+#SBATCH --time=0:30:00
 #SBATCH --no-requeue
 #Setup of execution environment
 #SBATCH --export=NONE
