@@ -1523,14 +1523,21 @@ namespace TimeIntegrationSchemes
 
       this->n_outer_iterations += solver_control.last_step();
 
-      const double n_inner_iterations =
+      const auto n_inner_iterations =
         preconditioner->get_n_iterations_and_clear();
 
-      this->n_inner_iterations += n_inner_iterations;
+      for (const auto i : n_inner_iterations)
+        this->n_inner_iterations += i;
 
       pcout << "   " << solver_control.last_step() << " outer " << solver_name
-            << " iterations and " << n_inner_iterations
-            << " inner CG iterations." << std::endl;
+            << " iterations and ";
+
+      pcout << n_inner_iterations[0];
+
+      for (unsigned int i = 1; i < n_inner_iterations.size(); ++i)
+        pcout << "+" << n_inner_iterations[i];
+
+      pcout << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
 
@@ -1645,7 +1652,6 @@ namespace TimeIntegrationSchemes
         , op(op)
         , time_bc(time_bc)
         , time_solver(time_solver)
-        , n_iterations(0)
       {
         preconditioners.resize(n_stages);
 
@@ -1656,6 +1662,8 @@ namespace TimeIntegrationSchemes
             preconditioners[i] = preconditioner.clone();
             preconditioners[i]->reinit();
           }
+
+        n_iterations.assign(n_stages, 0);
       }
 
       void
@@ -1690,7 +1698,7 @@ namespace TimeIntegrationSchemes
                          dst.block(i),
                          *preconditioners[i]);
 
-            n_iterations += solver_control.last_step();
+            n_iterations[i] += solver_control.last_step();
           }
 
         this->time_solver +=
@@ -1711,11 +1719,11 @@ namespace TimeIntegrationSchemes
                            .count();
       }
 
-      unsigned
+      std::vector<unsigned int>
       get_n_iterations_and_clear()
       {
-        const unsigned int temp = n_iterations;
-        this->n_iterations      = 0;
+        const auto temp = n_iterations;
+        n_iterations.assign(n_stages, 0);
         return temp;
       }
 
@@ -1738,7 +1746,7 @@ namespace TimeIntegrationSchemes
       double &time_bc;
       double &time_solver;
 
-      mutable unsigned int n_iterations;
+      mutable std::vector<unsigned int> n_iterations;
     };
 
     const unsigned int n_max_iterations;
