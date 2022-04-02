@@ -1259,20 +1259,19 @@ namespace TimeIntegrationSchemes
       table.add_value("n_inner_avg", n_inner_iterations_min_max_avg.avg);
       table.add_value("n_inner_max", n_inner_iterations_min_max_avg.max);
 
-      table.add_value("t", time_total / 1e9);
-      table.set_scientific("t", true);
-      table.add_value("t_rhs", time_rhs / 1e9);
-      table.set_scientific("t_rhs", true);
-      table.add_value("t_solver", time_outer_solver / 1e9);
-      table.set_scientific("t_solver", true);
-      table.add_value("t_update", time_solution_update / 1e9);
-      table.set_scientific("t_update", true);
-      table.add_value("t_vmult", time_system_vmult / 1e9);
-      table.set_scientific("t_vmult", true);
-      table.add_value("t_prec_bc", time_preconditioner_bc / 1e9);
-      table.set_scientific("t_prec_bc", true);
-      table.add_value("t_prec_solver", time_preconditioner_solver / 1e9);
-      table.set_scientific("t_prec_solver", true);
+      const auto add_time = [&](const std::string label, const double value){
+        const auto stat = Utilities::MPI::min_max_avg(value, comm);
+        table.add_value(label, stat.avg / 1e9);
+        table.set_scientific(label, true);  
+      };
+
+      add_time("t", time_total);
+      add_time("t_rhs", time_rhs);
+      add_time("t_solver", time_outer_solver);
+      add_time("t_update", time_solution_update);
+      add_time("t_vmult", time_system_vmult);
+      add_time("t_prec_bc", time_preconditioner_bc);
+      add_time("t_prec_solver", time_preconditioner_solver);
     }
 
   protected:
