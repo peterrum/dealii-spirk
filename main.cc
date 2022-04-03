@@ -235,7 +235,7 @@ namespace dealii
       void
       reinit(const VT &V, const MPI_Comm &row_comm)
       {
-        VT::reinit(V);
+        VT::reinit(V.get_partitioner(), row_comm);
         this->row_comm = row_comm;
       }
 
@@ -1844,12 +1844,13 @@ namespace TimeIntegrationSchemes
 
       // setup right-hand-side vector
       evaluate_rhs_function(time + (c_vec[my_stage] - 1.0) * time_step,
-                            system_rhs);
+                            system_solution);
       op.vmult(tmp, solution, 0.0, -1.0);
-      system_rhs.add(1.0, tmp);
+      system_solution.add(1.0, tmp);
 
       // ... perform basis change
-      perform_basis_change(system_rhs, system_rhs, A_inv);
+      perform_basis_change(system_rhs, system_solution, A_inv);
+      system_solution = 0.0;
 
       this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
                           std::chrono::system_clock::now() - time_rhs)
@@ -1982,15 +1983,43 @@ namespace TimeIntegrationSchemes
                          const LinearAlgebra::ReshapedVector<VectorType> & src,
                          const FullMatrix<typename VectorType::value_type> T)
     {
-      const auto fu =
-        [&T](const auto i, const auto j, auto &dst, const auto &src) {
-          if (i == j)
-            dst.equ(T[i][j], src);
-          else
-            dst.add(T[i][j], src);
-        };
+      if (true)
+        {
+          const auto fu =
+            [&T](const auto i, const auto j, auto &dst, const auto &src) {
+              if (i == j)
+                dst.equ(T[i][j], src);
+              else
+                dst.add(T[i][j], src);
+            };
 
-      matrix_vector_rol_operation<VectorType>(dst, src, fu);
+          matrix_vector_rol_operation<VectorType>(dst, src, fu);
+        }
+      else
+        {
+          const auto         comm     = src.get_row_mpi_communicator();
+          const unsigned int i        = Utilities::MPI::this_mpi_process(comm);
+          const unsigned int n_stages = Utilities::MPI::n_mpi_processes(comm);
+          const double       cut_off_tolerance = 1e-12; // TODO
+
+          MPI_Barrier(comm);
+
+          const auto sm_ptr = src.shared_vector_data();
+
+          for (unsigned int e = 0; e < src.locally_owned_size(); ++e)
+            {
+              typename VectorType::value_type temp = 0.0;
+
+              for (unsigned int j = 0; j < n_stages; ++j)
+                if (std::abs(T(i, j)) > cut_off_tolerance)
+                  temp += T(i, j) * sm_ptr[j][e];
+
+              dst.local_element(e) = temp;
+            }
+
+
+          MPI_Barrier(comm);
+        }
     }
 
     class SystemMatrix
