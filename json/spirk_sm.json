@@ -1,0 +1,14 @@
+{ 
+    "FEDegree" : 1,
+    "NRefinements" : 8,
+    "TimeIntegrationScheme" : "spirk", 
+    "IRKStages" : "2",
+    "TimeStepSize" : "0.0",
+    "EndTime" : "0.5",
+    "OperatorType" : "MatrixFree",
+    "BlockPreconditionerType" : "GMG",
+    "DoRowMajor" : true,
+    "Padding" : 0,
+    "UseSharedMemory" : true
+}
+
