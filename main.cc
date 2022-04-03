@@ -86,8 +86,6 @@ namespace dealii
       : SolverBase<VectorType>(solver_control)
       , GCRmaxit(GCRmaxit)
     {
-      H_vec.reserve(GCRmaxit);
-      Hd_vec.reserve(GCRmaxit);
     }
 
     template <typename MatrixType, typename PreconditionerType>
@@ -100,6 +98,20 @@ namespace dealii
       using number = typename VectorType::value_type;
 
       SolverControl::State conv = SolverControl::iterate;
+
+      typename VectorMemory<VectorType>::Pointer search_pointer(this->memory);
+      typename VectorMemory<VectorType>::Pointer Asearch_pointer(this->memory);
+      typename VectorMemory<VectorType>::Pointer p_pointer(this->memory);
+
+      VectorType & search = *search_pointer;
+      VectorType & Asearch = *Asearch_pointer;
+      VectorType & p = *p_pointer;
+
+      std::vector<typename VectorType::value_type> Hn_preloc;
+      Hn_preloc.reserve(GCRmaxit);
+
+      internal::SolverGMRESImplementation::TmpVectors<VectorType> H_vec(GCRmaxit, this->memory);
+      internal::SolverGMRESImplementation::TmpVectors<VectorType> Hd_vec(GCRmaxit, this->memory);
 
       search.reinit(x);
       Asearch.reinit(x);
@@ -124,15 +136,10 @@ namespace dealii
 
           it++;
 
-          if (H_vec.size() < it)
-            {
-              H_vec.resize(H_vec.size() + 1);
-              Hd_vec.resize(Hd_vec.size() + 1);
-              Hn_preloc.resize(Hn_preloc.size() + 1);
+          H_vec(it - 1, x);
+          Hd_vec(it - 1, x);
 
-              H_vec.back().reinit(x);
-              Hd_vec.back().reinit(x);
-            }
+          Hn_preloc.resize(it);
 
           A.vmult(Asearch, search);
 
@@ -167,14 +174,6 @@ namespace dealii
 
   private:
     const unsigned int GCRmaxit;
-
-    mutable VectorType search;
-    mutable VectorType Asearch;
-    mutable VectorType p;
-
-    mutable std::vector<typename VectorType::value_type> Hn_preloc;
-    mutable std::vector<VectorType>                      H_vec;
-    mutable std::vector<VectorType>                      Hd_vec;
   };
 
   class SPSolverControl : public SolverControl
@@ -1836,7 +1835,6 @@ namespace TimeIntegrationSchemes
       const auto time_total = std::chrono::system_clock::now();
       const auto time_rhs   = std::chrono::system_clock::now();
 
-      ReshapedVectorType system_rhs, system_solution;
       VectorType         tmp;
 
       system_rhs.reinit(solution, comm_row);
@@ -1955,7 +1953,7 @@ namespace TimeIntegrationSchemes
       const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
       const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
 
-      LinearAlgebra::ReshapedVector<VectorType> temp;
+      static LinearAlgebra::ReshapedVector<VectorType> temp;
       temp.reinit(src, true);
       temp.copy_locally_owned_data_from(src);
 
@@ -2054,7 +2052,6 @@ namespace TimeIntegrationSchemes
       {
         const auto time = std::chrono::system_clock::now();
 
-        ReshapedVectorType temp;
         temp.reinit(src);
 
         if (do_reduce_number_of_vmults == false)
@@ -2062,8 +2059,7 @@ namespace TimeIntegrationSchemes
             matrix_vector_rol_operation<VectorType>(
               dst,
               src,
-              [this,
-               &temp](const auto i, const auto j, auto &dst, const auto &src) {
+              [this](const auto i, const auto j, auto &dst, const auto &src) {
                 if (i == j)
                   op.vmult(static_cast<VectorType &>(dst),
                            static_cast<const VectorType &>(src),
@@ -2105,6 +2101,8 @@ namespace TimeIntegrationSchemes
       double &time;
 
       const bool use_sm;
+
+      mutable ReshapedVectorType temp;
     };
 
     class Preconditioner
@@ -2153,8 +2151,7 @@ namespace TimeIntegrationSchemes
 
         const auto time_solver = std::chrono::system_clock::now();
 
-        ReshapedVectorType temp; // TODO
-        temp.reinit(src);        //
+        temp.reinit(src); // TODO
 
         std::unique_ptr<SolverControl> solver_control;
 
@@ -2223,6 +2220,9 @@ namespace TimeIntegrationSchemes
       mutable unsigned int n_iterations;
 
       const bool use_sm;
+
+
+      mutable  ReshapedVectorType temp; // TODO
     };
 
     const MPI_Comm comm_row;
@@ -2236,6 +2236,9 @@ namespace TimeIntegrationSchemes
 
     mutable std::unique_ptr<SystemMatrix>   system_matrix;
     mutable std::unique_ptr<Preconditioner> preconditioner;
+
+    mutable ReshapedVectorType system_rhs;
+    mutable ReshapedVectorType system_solution;
   };
 } // namespace TimeIntegrationSchemes
 
