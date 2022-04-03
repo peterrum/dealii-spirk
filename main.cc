@@ -1849,7 +1849,7 @@ namespace TimeIntegrationSchemes
       system_solution.add(1.0, tmp);
 
       // ... perform basis change
-      perform_basis_change(system_rhs, system_solution, A_inv);
+      perform_basis_change(system_rhs, system_solution, A_inv, false);
       system_solution = 0.0;
 
       this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1981,13 +1981,14 @@ namespace TimeIntegrationSchemes
     static void
     perform_basis_change(LinearAlgebra::ReshapedVector<VectorType> &       dst,
                          const LinearAlgebra::ReshapedVector<VectorType> & src,
-                         const FullMatrix<typename VectorType::value_type> T)
+                         const FullMatrix<typename VectorType::value_type> T,
+                         const bool add = false)
     {
       if (true)
         {
           const auto fu =
-            [&T](const auto i, const auto j, auto &dst, const auto &src) {
-              if (i == j)
+            [&T, add](const auto i, const auto j, auto &dst, const auto &src) {
+              if ((add == false) && (i == j))
                 dst.equ(T[i][j], src);
               else
                 dst.add(T[i][j], src);
@@ -2014,7 +2015,10 @@ namespace TimeIntegrationSchemes
                 if (std::abs(T(i, j)) > cut_off_tolerance)
                   temp += T(i, j) * sm_ptr[j][e];
 
-              dst.local_element(e) = temp;
+              if (add)
+                dst.local_element(e) += temp;
+              else
+                dst.local_element(e) = temp;
             }
 
 
@@ -2077,13 +2081,7 @@ namespace TimeIntegrationSchemes
                      1.0,
                      0.0);
 
-            matrix_vector_rol_operation<VectorType>(
-              dst,
-              temp,
-              [this,
-               &temp](const auto i, const auto j, auto &dst, const auto &src) {
-                dst.add(A_inv(i, j), src);
-              });
+            perform_basis_change(dst, temp, A_inv, true);
           }
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2137,7 +2135,7 @@ namespace TimeIntegrationSchemes
       {
         const auto time_bc_0 = std::chrono::system_clock::now();
 
-        perform_basis_change(dst, src, T_mat_inv);
+        perform_basis_change(dst, src, T_mat_inv, false);
 
         this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
                            std::chrono::system_clock::now() - time_bc_0)
@@ -2176,7 +2174,7 @@ namespace TimeIntegrationSchemes
 
         const auto time_bc_1 = std::chrono::system_clock::now();
 
-        perform_basis_change(dst, temp, T_mat);
+        perform_basis_change(dst, temp, T_mat, false);
 
         this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
                            std::chrono::system_clock::now() - time_bc_1)
