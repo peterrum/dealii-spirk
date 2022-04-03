@@ -85,8 +85,7 @@ namespace dealii
     SolverGCR(SolverControl &solver_control, const unsigned int GCRmaxit = 40)
       : SolverBase<VectorType>(solver_control)
       , GCRmaxit(GCRmaxit)
-    {
-    }
+    {}
 
     template <typename MatrixType, typename PreconditionerType>
     void
@@ -103,15 +102,17 @@ namespace dealii
       typename VectorMemory<VectorType>::Pointer Asearch_pointer(this->memory);
       typename VectorMemory<VectorType>::Pointer p_pointer(this->memory);
 
-      VectorType & search = *search_pointer;
-      VectorType & Asearch = *Asearch_pointer;
-      VectorType & p = *p_pointer;
+      VectorType &search  = *search_pointer;
+      VectorType &Asearch = *Asearch_pointer;
+      VectorType &p       = *p_pointer;
 
       std::vector<typename VectorType::value_type> Hn_preloc;
       Hn_preloc.reserve(GCRmaxit);
 
-      internal::SolverGMRESImplementation::TmpVectors<VectorType> H_vec(GCRmaxit, this->memory);
-      internal::SolverGMRESImplementation::TmpVectors<VectorType> Hd_vec(GCRmaxit, this->memory);
+      internal::SolverGMRESImplementation::TmpVectors<VectorType> H_vec(
+        GCRmaxit, this->memory);
+      internal::SolverGMRESImplementation::TmpVectors<VectorType> Hd_vec(
+        GCRmaxit, this->memory);
 
       search.reinit(x);
       Asearch.reinit(x);
@@ -1835,7 +1836,7 @@ namespace TimeIntegrationSchemes
       const auto time_total = std::chrono::system_clock::now();
       const auto time_rhs   = std::chrono::system_clock::now();
 
-      VectorType         tmp;
+      VectorType tmp;
 
       system_rhs.reinit(solution, comm_row);
       system_solution.reinit(solution, comm_row);
@@ -2222,7 +2223,7 @@ namespace TimeIntegrationSchemes
       const bool use_sm;
 
 
-      mutable  ReshapedVectorType temp; // TODO
+      mutable ReshapedVectorType temp; // TODO
     };
 
     const MPI_Comm comm_row;
