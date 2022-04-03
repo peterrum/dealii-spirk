@@ -1775,6 +1775,7 @@ namespace TimeIntegrationSchemes
                      const double               inner_tolerance,
                      const unsigned int         n_stages,
                      const bool                 do_reduce_number_of_vmults,
+                     const bool                 use_sm,
                      const MassLaplaceOperator &op,
                      const PreconditionerBase<VectorType> &block_preconditioner,
                      const std::function<void(const double, VectorType &)>
@@ -1789,6 +1790,7 @@ namespace TimeIntegrationSchemes
       , n_max_iterations(1000)
       , outer_tolerance(outer_tolerance)
       , inner_tolerance(inner_tolerance)
+      , use_sm(use_sm)
     {}
 
     void
@@ -1816,7 +1818,8 @@ namespace TimeIntegrationSchemes
                                            A_inv,
                                            time_step,
                                            op,
-                                           time_system_vmult);
+                                           time_system_vmult,
+                                           use_sm);
           this->preconditioner =
             std::make_unique<Preconditioner>(comm_row,
                                              d_vec,
@@ -1827,7 +1830,8 @@ namespace TimeIntegrationSchemes
                                              op,
                                              block_preconditioner,
                                              time_preconditioner_bc,
-                                             time_preconditioner_solver);
+                                             time_preconditioner_solver,
+                                             use_sm);
         }
 
       const auto time_total = std::chrono::system_clock::now();
@@ -1849,7 +1853,7 @@ namespace TimeIntegrationSchemes
       system_solution.add(1.0, tmp);
 
       // ... perform basis change
-      perform_basis_change(system_rhs, system_solution, A_inv, false);
+      perform_basis_change(system_rhs, system_solution, A_inv, false, use_sm);
       system_solution = 0.0;
 
       this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1982,9 +1986,10 @@ namespace TimeIntegrationSchemes
     perform_basis_change(LinearAlgebra::ReshapedVector<VectorType> &       dst,
                          const LinearAlgebra::ReshapedVector<VectorType> & src,
                          const FullMatrix<typename VectorType::value_type> T,
-                         const bool add = false)
+                         const bool                                        add,
+                         const bool use_sm)
     {
-      if (true)
+      if (use_sm == false)
         {
           const auto fu =
             [&T, add](const auto i, const auto j, auto &dst, const auto &src) {
@@ -2034,13 +2039,15 @@ namespace TimeIntegrationSchemes
                    const FullMatrix<typename VectorType::value_type> &A_inv,
                    const double                                       time_step,
                    const MassLaplaceOperator &                        op,
-                   double &                                           time)
+                   double &                                           time,
+                   const bool                                         use_sm)
         : my_stage(Utilities::MPI::this_mpi_process(comm_row))
         , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
         , A_inv(A_inv)
         , time_step(time_step)
         , op(op)
         , time(time)
+        , use_sm(use_sm)
       {}
 
       void
@@ -2081,7 +2088,7 @@ namespace TimeIntegrationSchemes
                      1.0,
                      0.0);
 
-            perform_basis_change(dst, temp, A_inv, true);
+            perform_basis_change(dst, temp, A_inv, true, use_sm);
           }
 
         this->time += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2097,6 +2104,8 @@ namespace TimeIntegrationSchemes
       const MassLaplaceOperator &                        op;
 
       double &time;
+
+      const bool use_sm;
     };
 
     class Preconditioner
@@ -2111,7 +2120,8 @@ namespace TimeIntegrationSchemes
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioners,
                      double &                              time_bc,
-                     double &                              time_solver)
+                     double &                              time_solver,
+                     const bool                            use_sm)
         : comm_row(comm_row)
         , n_max_iterations(100)
         , inner_tolerance(inner_tolerance)
@@ -2125,6 +2135,7 @@ namespace TimeIntegrationSchemes
         , time_bc(time_bc)
         , time_solver(time_solver)
         , n_iterations(0)
+        , use_sm(use_sm)
       {
         op.reinit(d_vec[my_stage], tau);
         preconditioners.reinit();
@@ -2135,7 +2146,7 @@ namespace TimeIntegrationSchemes
       {
         const auto time_bc_0 = std::chrono::system_clock::now();
 
-        perform_basis_change(dst, src, T_mat_inv, false);
+        perform_basis_change(dst, src, T_mat_inv, false, use_sm);
 
         this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
                            std::chrono::system_clock::now() - time_bc_0)
@@ -2174,7 +2185,7 @@ namespace TimeIntegrationSchemes
 
         const auto time_bc_1 = std::chrono::system_clock::now();
 
-        perform_basis_change(dst, temp, T_mat, false);
+        perform_basis_change(dst, temp, T_mat, false, use_sm);
 
         this->time_bc += std::chrono::duration_cast<std::chrono::nanoseconds>(
                            std::chrono::system_clock::now() - time_bc_1)
@@ -2211,6 +2222,8 @@ namespace TimeIntegrationSchemes
       double &time_solver;
 
       mutable unsigned int n_iterations;
+
+      const bool use_sm;
     };
 
     const MPI_Comm comm_row;
@@ -2218,6 +2231,7 @@ namespace TimeIntegrationSchemes
     const unsigned int n_max_iterations;
     const double       outer_tolerance;
     const double       inner_tolerance;
+    const bool         use_sm;
 
     mutable double time_step = 0.0;
 
@@ -2245,6 +2259,7 @@ namespace HeatEquation
     std::string operator_type             = "MatrixBased";
     std::string block_preconditioner_type = "AMG";
 
+    bool use_sm       = false;
     bool do_row_major = true;
     int  padding      = -1; // -1: no padding; 0: use sm;
                             // else valid: padding > irk_stages
@@ -2280,6 +2295,7 @@ namespace HeatEquation
                         "",
                         Patterns::Selection("AMG|GMG"));
 
+      prm.add_parameter("UseSharedMemory", use_sm);
       prm.add_parameter("DoRowMajor", do_row_major);
       prm.add_parameter("Padding", padding);
 
@@ -2446,6 +2462,7 @@ namespace HeatEquation
             params.inner_tolerance,
             params.irk_stages,
             params.do_reduce_number_of_vmults,
+            params.use_sm,
             *mass_laplace_operator,
             *preconditioner,
             evaluate_rhs_function);
