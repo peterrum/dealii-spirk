@@ -1259,10 +1259,10 @@ namespace TimeIntegrationSchemes
       table.add_value("n_inner_avg", n_inner_iterations_min_max_avg.avg);
       table.add_value("n_inner_max", n_inner_iterations_min_max_avg.max);
 
-      const auto add_time = [&](const std::string label, const double value){
+      const auto add_time = [&](const std::string label, const double value) {
         const auto stat = Utilities::MPI::min_max_avg(value, comm);
         table.add_value(label, stat.avg / 1e9);
-        table.set_scientific(label, true);  
+        table.set_scientific(label, true);
       };
 
       add_time("t", time_total);
