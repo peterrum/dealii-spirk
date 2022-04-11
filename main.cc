@@ -640,6 +640,12 @@ public:
   virtual const SparseMatrixType &
   get_system_matrix() const = 0;
 
+  virtual const SparseMatrixType &
+  get_system_matrix(const MPI_Comm comm) const = 0;
+
+  virtual bool
+  supports_sub_communicator() const = 0;
+
   virtual void
   compute_inverse_diagonal(VectorType &diagonal) const = 0;
 
@@ -780,6 +786,18 @@ public:
     return tmp_matrix;
   }
 
+  const SparseMatrixType &
+  get_system_matrix(const MPI_Comm comm) const override
+  {
+    (void)comm;
+    return get_system_matrix();
+  }
+
+  virtual bool
+  supports_sub_communicator() const
+  {
+    return false;
+  }
 
 private:
   mutable SparseMatrixType                                   mass_matrix;
@@ -854,12 +872,18 @@ public:
   const SparseMatrixType &
   get_system_matrix() const override
   {
-    if (system_matrix.m() == 0 && system_matrix.n() == 0)
+    return get_system_matrix(matrix_free.get_task_info().communicator);
+  }
+
+  const SparseMatrixType &
+  get_system_matrix(const MPI_Comm comm) const override
+  {
+    if (comm != MPI_COMM_NULL && system_matrix.m() == 0 &&
+        system_matrix.n() == 0)
       {
         const auto &dof_handler = this->matrix_free.get_dof_handler();
-        TrilinosWrappers::SparsityPattern dsp(
-          dof_handler.locally_owned_dofs(),
-          dof_handler.get_triangulation().get_communicator());
+        TrilinosWrappers::SparsityPattern dsp(dof_handler.locally_owned_dofs(),
+                                              comm);
         DoFTools::make_sparsity_pattern(dof_handler, dsp, *constraints);
         dsp.compress();
         system_matrix.reinit(dsp);
@@ -873,6 +897,12 @@ public:
       this);
 
     return system_matrix;
+  }
+
+  virtual bool
+  supports_sub_communicator() const
+  {
+    return true;
   }
 
   void
@@ -1169,18 +1199,33 @@ public:
     mg_smoother.initialize(mg_operators, smoother_data);
 
     // setup coarse-grid solver
-    precondition_amg = std::make_unique<TrilinosWrappers::PreconditionAMG>();
+    const auto coarse_comm =
+      mg_operators[min_level]->supports_sub_communicator() ?
+        *sub_comm :
+        mg_dof_handlers[min_level]->get_communicator();
+    if (coarse_comm != MPI_COMM_NULL)
+      {
+        precondition_amg =
+          std::make_unique<TrilinosWrappers::PreconditionAMG>();
 
-    TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-    amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
-    amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
-    amg_data.smoother_type = additional_data.coarse_grid_smoother_type.c_str();
-    precondition_amg->initialize(mg_operators[min_level]->get_system_matrix(),
-                                 amg_data);
-    mg_coarse = std::make_unique<
-      MGCoarseGridApplyPreconditioner<VectorType,
-                                      TrilinosWrappers::PreconditionAMG>>(
-      *precondition_amg);
+        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+        amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
+        amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
+        amg_data.smoother_type =
+          additional_data.coarse_grid_smoother_type.c_str();
+        precondition_amg->initialize(
+          mg_operators[min_level]->get_system_matrix(coarse_comm), amg_data);
+        mg_coarse = std::make_unique<
+          MGCoarseGridApplyPreconditioner<VectorType,
+                                          TrilinosWrappers::PreconditionAMG>>(
+          *precondition_amg);
+      }
+    else
+      {
+        mg_coarse = std::make_unique<
+          MGCoarseGridApplyPreconditioner<VectorType,
+                                          TrilinosWrappers::PreconditionAMG>>();
+      }
 
     // create multigrid algorithm (put level operators, smoothers, transfer
     // operators and smoothers together)
