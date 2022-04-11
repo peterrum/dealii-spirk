@@ -21,6 +21,7 @@
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/utilities.h>
 
+#include <deal.II/distributed/repartitioning_policy_tools.h>
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/dofs/dof_handler.h>
@@ -1086,6 +1087,58 @@ public:
       std::make_unique<MGTransferType>(transfers, [&](const auto l, auto &vec) {
         this->mg_operators[l]->initialize_dof_vector(vec);
       });
+
+    this->sub_comm = create_sub_comm(*mg_dof_handlers[min_level]);
+  }
+
+  template <typename MeshType>
+  static std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>>
+  create_sub_comm(const MeshType &mesh)
+  {
+    const auto comm     = mesh.get_communicator();
+    auto       sub_comm = new MPI_Comm;
+
+    unsigned int cell_counter = 0;
+
+    for (const auto &cell : mesh.active_cell_iterators())
+      if (cell->is_locally_owned())
+        cell_counter++;
+
+    const unsigned int rank = Utilities::MPI::this_mpi_process(comm);
+
+#if DEBUG
+    const auto t = Utilities::MPI::gather(comm, cell_counter);
+
+    if (rank == 0)
+      {
+        for (const auto tt : t)
+          std::cout << tt << " ";
+        std::cout << std::endl;
+      }
+#endif
+
+    const int temp = cell_counter == 0 ? -1 : rank;
+
+    const unsigned int max_rank = Utilities::MPI::max(temp, comm);
+
+    if (max_rank != Utilities::MPI::n_mpi_processes(comm) - 1)
+      {
+        const bool color = rank <= max_rank;
+        MPI_Comm_split(comm, color, rank, sub_comm);
+
+        if (color == false)
+          {
+            MPI_Comm_free(sub_comm);
+            *sub_comm = MPI_COMM_NULL;
+          }
+      }
+
+    return std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>>(
+      sub_comm, [](MPI_Comm *sub_comm) {
+        if (*sub_comm != MPI_COMM_NULL)
+          MPI_Comm_free(sub_comm);
+        delete sub_comm;
+      });
   }
 
   virtual void
@@ -1116,13 +1169,6 @@ public:
     mg_smoother.initialize(mg_operators, smoother_data);
 
     // setup coarse-grid solver
-    coarse_grid_solver_control =
-      std::make_unique<ReductionControl>(additional_data.coarse_grid_maxiter,
-                                         additional_data.coarse_grid_abstol,
-                                         additional_data.coarse_grid_reltol,
-                                         false,
-                                         false);
-
     precondition_amg = std::make_unique<TrilinosWrappers::PreconditionAMG>();
 
     TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
@@ -1176,6 +1222,8 @@ private:
 
   const DoFHandler<dim> &dof_handler;
 
+  std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>> sub_comm;
+
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
   const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
                                                               mg_constraints;
@@ -1191,8 +1239,6 @@ private:
 
   mutable MGSmootherPrecondition<LevelMatrixType, SmootherType, VectorType>
     mg_smoother;
-
-  mutable std::unique_ptr<ReductionControl> coarse_grid_solver_control;
 
   mutable std::unique_ptr<TrilinosWrappers::PreconditionAMG> precondition_amg;
 
@@ -2519,8 +2565,10 @@ namespace HeatEquation
         }
       else if (params.block_preconditioner_type == "GMG")
         {
+          // tighten, since we want to use a subcommunicator on the coarse grid
+          RepartitioningPolicyTools::DefaultPolicy<dim> policy(true);
           mg_triangulations = MGTransferGlobalCoarseningTools::
-            create_geometric_coarsening_sequence(triangulation);
+            create_geometric_coarsening_sequence(triangulation, policy);
 
           const unsigned int min_level = 0;
           const unsigned int max_level = mg_triangulations.size() - 1;
