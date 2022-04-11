@@ -1,5 +1,16 @@
 #pragma once
 
+#include <deal.II/lac/precondition.h>
+#include <deal.II/lac/trilinos_precondition.h>
+#include <deal.II/lac/trilinos_sparse_matrix.h>
+#include <deal.II/lac/trilinos_sparsity_pattern.h>
+
+#include <deal.II/multigrid/mg_coarse.h>
+#include <deal.II/multigrid/mg_matrix.h>
+#include <deal.II/multigrid/mg_smoother.h>
+#include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+#include <deal.II/multigrid/multigrid.h>
+
 namespace dealii
 {
   /**
@@ -299,10 +310,14 @@ public:
             *sub_comm = MPI_COMM_NULL;
           }
       }
+    else
+      {
+        *sub_comm = comm;
+      }
 
     return std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>>(
-      sub_comm, [](MPI_Comm *sub_comm) {
-        if (*sub_comm != MPI_COMM_NULL)
+      sub_comm, [comm](MPI_Comm *sub_comm) {
+        if (*sub_comm != MPI_COMM_NULL && *sub_comm != comm)
           MPI_Comm_free(sub_comm);
         delete sub_comm;
       });

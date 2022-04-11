@@ -1,5 +1,17 @@
 #pragma once
 
+#include <deal.II/dofs/dof_tools.h>
+
+#include <deal.II/lac/dynamic_sparsity_pattern.h>
+#include <deal.II/lac/trilinos_sparse_matrix.h>
+#include <deal.II/lac/trilinos_sparsity_pattern.h>
+
+#include <deal.II/matrix_free/fe_evaluation.h>
+#include <deal.II/matrix_free/matrix_free.h>
+#include <deal.II/matrix_free/tools.h>
+
+#include <deal.II/numerics/matrix_creator.h>
+
 class MassLaplaceOperator : public Subscriptor
 {
 public:
