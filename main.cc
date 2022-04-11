@@ -966,6 +966,7 @@ public:
         smoother_data[level].degree          = additional_data.smoothing_degree;
         smoother_data[level].eig_cg_n_iterations =
           additional_data.smoothing_eig_cg_n_iterations;
+        smoother_data[level].constraints.copy_from(*mg_constraints[level]);
       }
 
     mg_smoother.initialize(mg_operators, smoother_data);
@@ -2383,8 +2384,7 @@ namespace HeatEquation
           mg_triangulations = MGTransferGlobalCoarseningTools::
             create_geometric_coarsening_sequence(triangulation);
 
-          // TODO: problem during setup of Chebyshev if coarse-grid has 0 DoFs
-          const unsigned int min_level = mg_triangulations.size() == 1 ? 0 : 1;
+          const unsigned int min_level = 0;
           const unsigned int max_level = mg_triangulations.size() - 1;
 
           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
