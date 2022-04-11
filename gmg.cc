@@ -25,50 +25,47 @@ using SparseMatrixType = TrilinosWrappers::SparseMatrix;
 
 struct Parameters
 {
-  unsigned int dim = 2;
-  unsigned int fe_degree = 1;
+  unsigned int dim           = 2;
+  unsigned int fe_degree     = 1;
   unsigned int n_refinements = 3;
 
-  std::string operator_type = "MatrixFree";
+  std::string operator_type             = "MatrixFree";
   std::string block_preconditioner_type = "GMG";
 };
 
-template<int dim>
-    class RightHandSide : public Function<dim>
-    {
-    public:
-      virtual double
-      value(const Point<dim> & p,
-            const unsigned int component = 0) const override
-      {
-        (void)p;
-        (void)component;
-
-        return 1.0;
-      }
-
-    private:
-    };
-
-template<int dim>
-void
-test(const Parameters & params, ConvergenceTable &table)
+template <int dim>
+class RightHandSide : public Function<dim>
 {
+public:
+  virtual double
+  value(const Point<dim> &p, const unsigned int component = 0) const override
+  {
+    (void)p;
+    (void)component;
 
+    return 1.0;
+  }
+
+private:
+};
+
+template <int dim>
+void
+test(const Parameters &params, ConvergenceTable &table)
+{
   parallel::distributed::Triangulation<dim> triangulation(MPI_COMM_WORLD);
-      GridGenerator::hyper_cube(triangulation);
-      triangulation.refine_global(params.n_refinements);
+  GridGenerator::hyper_cube(triangulation);
+  triangulation.refine_global(params.n_refinements);
 
   QGauss<dim> quadrature(params.fe_degree + 1);
-  FE_Q<dim> fe(params.fe_degree);
+  FE_Q<dim>   fe(params.fe_degree);
 
   DoFHandler<dim> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
 
   AffineConstraints<double> constraints;
-  IndexSet locally_relevant_dofs;
-  DoFTools::extract_locally_relevant_dofs(dof_handler,
-                                          locally_relevant_dofs);
+  IndexSet                  locally_relevant_dofs;
+  DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
   constraints.reinit(locally_relevant_dofs);
   DoFTools::make_hanging_node_constraints(dof_handler, constraints);
   DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
@@ -77,88 +74,90 @@ test(const Parameters & params, ConvergenceTable &table)
   std::shared_ptr<const MassLaplaceOperator> mass_laplace_operator;
 
   if (params.operator_type == "MatrixBased")
-        mass_laplace_operator =
-          std::make_unique<MassLaplaceOperatorMatrixBased>(dof_handler,
-                                                           constraints,
-                                                           quadrature);
+    mass_laplace_operator =
+      std::make_unique<MassLaplaceOperatorMatrixBased>(dof_handler,
+                                                       constraints,
+                                                       quadrature);
   else if (params.operator_type == "MatrixFree")
-        mass_laplace_operator =
-          std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
-            dof_handler, constraints, quadrature);
-  else
-        AssertThrow(false, ExcNotImplemented());
-
-  
-      std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
-
-      std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
-
-      if (params.block_preconditioner_type == "AMG")
-        {
-          preconditioner = std::make_unique<
-            PreconditionerAMG<MassLaplaceOperator, VectorType>>(
-            *mass_laplace_operator);
-        }
-      else if (params.block_preconditioner_type == "GMG")
-        {
-          // tighten, since we want to use a subcommunicator on the coarse grid
-          RepartitioningPolicyTools::DefaultPolicy<dim> policy(true);
-          mg_triangulations = MGTransferGlobalCoarseningTools::
-            create_geometric_coarsening_sequence(triangulation, policy);
-
-          const unsigned int min_level = 0;
-          const unsigned int max_level = mg_triangulations.size() - 1;
-
-          MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
-            min_level, max_level);
-          MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
-            mg_constraints(min_level, max_level);
-          MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
-            mg_operators(min_level, max_level);
-
-          for (unsigned int l = min_level; l <= max_level; ++l)
-            {
-              auto dof_handler =
-                std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
-              auto constraints = std::make_shared<AffineConstraints<double>>();
-
-              dof_handler->distribute_dofs(fe);
-
-              IndexSet locally_relevant_dofs;
-              DoFTools::extract_locally_relevant_dofs(*dof_handler,
-                                                      locally_relevant_dofs);
-              constraints->reinit(locally_relevant_dofs);
-
-              DoFTools::make_zero_boundary_constraints(*dof_handler,
-                                                       0,
-                                                       *constraints);
-
-              constraints->close();
-
-              if (params.operator_type == "MatrixBased")
-                mg_operators[l] =
-                  std::make_unique<MassLaplaceOperatorMatrixBased>(*dof_handler,
-                                                                   *constraints,
+    mass_laplace_operator =
+      std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
+                                                                   constraints,
                                                                    quadrature);
-              else if (params.operator_type == "MatrixFree")
-                mg_operators[l] =
-                  std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
-                    *dof_handler, *constraints, quadrature);
-              else
-                AssertThrow(false, ExcNotImplemented());
+  else
+    AssertThrow(false, ExcNotImplemented());
 
-              mass_laplace_operator->attach(*mg_operators[l]);
 
-              mg_dof_handlers[l] = dof_handler;
-              mg_constraints[l]  = constraints;
-            }
+  std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
 
-          preconditioner = std::make_unique<
-            PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
-            dof_handler, mg_dof_handlers, mg_constraints, mg_operators);
+  std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
+
+  if (params.block_preconditioner_type == "AMG")
+    {
+      preconditioner =
+        std::make_unique<PreconditionerAMG<MassLaplaceOperator, VectorType>>(
+          *mass_laplace_operator);
+    }
+  else if (params.block_preconditioner_type == "GMG")
+    {
+      // tighten, since we want to use a subcommunicator on the coarse grid
+      RepartitioningPolicyTools::DefaultPolicy<dim> policy(true);
+      mg_triangulations =
+        MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
+          triangulation, policy);
+
+      const unsigned int min_level = 0;
+      const unsigned int max_level = mg_triangulations.size() - 1;
+
+      MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
+        min_level, max_level);
+      MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+        mg_constraints(min_level, max_level);
+      MGLevelObject<std::shared_ptr<const MassLaplaceOperator>> mg_operators(
+        min_level, max_level);
+
+      for (unsigned int l = min_level; l <= max_level; ++l)
+        {
+          auto dof_handler =
+            std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+          auto constraints = std::make_shared<AffineConstraints<double>>();
+
+          dof_handler->distribute_dofs(fe);
+
+          IndexSet locally_relevant_dofs;
+          DoFTools::extract_locally_relevant_dofs(*dof_handler,
+                                                  locally_relevant_dofs);
+          constraints->reinit(locally_relevant_dofs);
+
+          DoFTools::make_zero_boundary_constraints(*dof_handler,
+                                                   0,
+                                                   *constraints);
+
+          constraints->close();
+
+          if (params.operator_type == "MatrixBased")
+            mg_operators[l] =
+              std::make_unique<MassLaplaceOperatorMatrixBased>(*dof_handler,
+                                                               *constraints,
+                                                               quadrature);
+          else if (params.operator_type == "MatrixFree")
+            mg_operators[l] =
+              std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
+                *dof_handler, *constraints, quadrature);
+          else
+            AssertThrow(false, ExcNotImplemented());
+
+          mass_laplace_operator->attach(*mg_operators[l]);
+
+          mg_dof_handlers[l] = dof_handler;
+          mg_constraints[l]  = constraints;
         }
-      else
-        AssertThrow(false, ExcNotImplemented());
+
+      preconditioner = std::make_unique<
+        PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
+        dof_handler, mg_dof_handlers, mg_constraints, mg_operators);
+    }
+  else
+    AssertThrow(false, ExcNotImplemented());
 
   preconditioner->reinit();
 
@@ -167,25 +166,24 @@ test(const Parameters & params, ConvergenceTable &table)
   mass_laplace_operator->initialize_dof_vector(dst);
   mass_laplace_operator->initialize_dof_vector(src);
 
-        VectorTools::create_right_hand_side(
-          dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
+  VectorTools::create_right_hand_side(
+    dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
 
-  ReductionControl        solver_control(1000, 1e-20, 1e-8);
-  SolverCG<VectorType> cg(solver_control);  
+  ReductionControl     solver_control(1000, 1e-20, 1e-8);
+  SolverCG<VectorType> cg(solver_control);
 
   {
     dst = 0.0;
-  cg.solve(*mass_laplace_operator, dst, src, *preconditioner);  
+    cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
   }
 
   {
     dst = 0.0;
-  cg.solve(*mass_laplace_operator, dst, src, *preconditioner);  
+    cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
   }
 
   table.add_value("n_levels", triangulation.n_global_levels() - 1);
   table.add_value("n_iterations", solver_control.last_step());
-
 }
 
 int
@@ -200,7 +198,7 @@ main(int argc, char **argv)
                                          MPI_COMM_WORLD) == 0);
 
 #ifdef DEBUG
-          pcout << "Running in debug mode!" << std::endl;
+      pcout << "Running in debug mode!" << std::endl;
 #endif
 
       unsigned int max_n_refinements = 6;
@@ -213,9 +211,9 @@ main(int argc, char **argv)
         {
           params.n_refinements = i;
 
-          if(params.dim == 2)
+          if (params.dim == 2)
             test<2>(params, table);
-          else if(params.dim == 3)
+          else if (params.dim == 3)
             test<3>(params, table);
           else
             AssertThrow(false, ExcNotImplemented());
