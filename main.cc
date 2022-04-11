@@ -1075,6 +1075,8 @@ namespace TimeIntegrationSchemes
   class Interface
   {
   public:
+    virtual ~Interface() = default;
+
     virtual void
     solve(VectorType &       solution,
           const unsigned int timestep_number,
@@ -1792,6 +1794,11 @@ namespace TimeIntegrationSchemes
       , use_sm(use_sm)
     {}
 
+    ~IRKStageParallel()
+    {
+      GrowingVectorMemory<ReshapedVectorType>::release_unused_memory();
+    }
+
     void
     solve(VectorType &       solution,
           const unsigned int timestep_number,
@@ -1954,7 +1961,11 @@ namespace TimeIntegrationSchemes
       const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
       const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
 
-      static LinearAlgebra::ReshapedVector<VectorType> temp;
+      GrowingVectorMemory<LinearAlgebra::ReshapedVector<VectorType>> memory;
+      typename VectorMemory<LinearAlgebra::ReshapedVector<VectorType>>::Pointer
+        temp_pointer(memory);
+
+      LinearAlgebra::ReshapedVector<VectorType> &temp = *temp_pointer;
       temp.reinit(src, true);
       temp.copy_locally_owned_data_from(src);
 
@@ -2880,9 +2891,11 @@ main(int argc, char **argv)
 
 #endif
 
-              HeatEquation::Problem<dim> heat_equation_solver(
-                params, comm_global, comm_row, comm_column, table);
-              heat_equation_solver.run();
+              {
+                HeatEquation::Problem<dim> heat_equation_solver(
+                  params, comm_global, comm_row, comm_column, table);
+                heat_equation_solver.run();
+              }
 
               MPI_Comm_free(&comm_column);
               MPI_Comm_free(&comm_row);
