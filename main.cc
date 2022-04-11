@@ -21,6 +21,7 @@
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/utilities.h>
 
+#include <deal.II/distributed/repartitioning_policy_tools.h>
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/dofs/dof_handler.h>
@@ -75,6 +76,150 @@ using namespace dealii;
 using VectorType       = LinearAlgebra::distributed::Vector<double>;
 using BlockVectorType  = LinearAlgebra::distributed::BlockVector<double>;
 using SparseMatrixType = TrilinosWrappers::SparseMatrix;
+
+namespace dealii
+{
+  /**
+   * Coarse grid solver using a preconditioner only. This is a little wrapper,
+   * transforming a preconditioner into a coarse grid solver.
+   */
+  template <class VectorType, class PreconditionerType>
+  class MGCoarseGridApplyPreconditioner : public MGCoarseGridBase<VectorType>
+  {
+  public:
+    /**
+     * Default constructor.
+     */
+    MGCoarseGridApplyPreconditioner();
+
+    /**
+     * Constructor. Store a pointer to the preconditioner for later use.
+     */
+    MGCoarseGridApplyPreconditioner(const PreconditionerType &precondition);
+
+    /**
+     * Clear the pointer.
+     */
+    void
+    clear();
+
+    /**
+     * Initialize new data.
+     */
+    void
+    initialize(const PreconditionerType &precondition);
+
+    /**
+     * Implementation of the abstract function.
+     */
+    virtual void
+    operator()(const unsigned int level,
+               VectorType &       dst,
+               const VectorType & src) const override;
+
+  private:
+    /**
+     * Reference to the preconditioner.
+     */
+    SmartPointer<
+      const PreconditionerType,
+      MGCoarseGridApplyPreconditioner<VectorType, PreconditionerType>>
+      preconditioner;
+  };
+
+
+
+  template <class VectorType, class PreconditionerType>
+  MGCoarseGridApplyPreconditioner<VectorType, PreconditionerType>::
+    MGCoarseGridApplyPreconditioner()
+    : preconditioner(0, typeid(*this).name())
+  {}
+
+
+
+  template <class VectorType, class PreconditionerType>
+  MGCoarseGridApplyPreconditioner<VectorType, PreconditionerType>::
+    MGCoarseGridApplyPreconditioner(const PreconditionerType &preconditioner)
+    : preconditioner(&preconditioner, typeid(*this).name())
+  {}
+
+
+
+  template <class VectorType, class PreconditionerType>
+  void
+  MGCoarseGridApplyPreconditioner<VectorType, PreconditionerType>::initialize(
+    const PreconditionerType &preconditioner_)
+  {
+    preconditioner = &preconditioner_;
+  }
+
+
+
+  template <class VectorType, class PreconditionerType>
+  void
+  MGCoarseGridApplyPreconditioner<VectorType, PreconditionerType>::clear()
+  {
+    preconditioner = 0;
+  }
+
+
+  namespace internal
+  {
+    namespace MGCoarseGridApplyPreconditioner
+    {
+      template <class VectorType,
+                class PreconditionerType,
+                typename std::enable_if<
+                  std::is_same<typename VectorType::value_type, double>::value,
+                  VectorType>::type * = nullptr>
+      void
+      solve(const PreconditionerType preconditioner,
+            VectorType &             dst,
+            const VectorType &       src)
+      {
+        // to allow the case that the preconditioner was only set up on a
+        // subset of processes
+        if (preconditioner != nullptr)
+          preconditioner->vmult(dst, src);
+      }
+
+      template <class VectorType,
+                class PreconditionerType,
+                typename std::enable_if<
+                  !std::is_same<typename VectorType::value_type, double>::value,
+                  VectorType>::type * = nullptr>
+      void
+      solve(const PreconditionerType preconditioner,
+            VectorType &             dst,
+            const VectorType &       src)
+      {
+        LinearAlgebra::distributed::Vector<double> src_;
+        LinearAlgebra::distributed::Vector<double> dst_;
+
+        src_ = src;
+        dst_ = dst;
+
+        // to allow the case that the preconditioner was only set up on a
+        // subset of processes
+        if (preconditioner != nullptr)
+          preconditioner->vmult(dst_, src_);
+
+        dst = dst_;
+      }
+    } // namespace MGCoarseGridApplyPreconditioner
+  }   // namespace internal
+
+
+  template <class VectorType, class PreconditionerType>
+  void
+  MGCoarseGridApplyPreconditioner<VectorType, PreconditionerType>::operator()(
+    const unsigned int /*level*/,
+    VectorType &      dst,
+    const VectorType &src) const
+  {
+    internal::MGCoarseGridApplyPreconditioner::solve(preconditioner, dst, src);
+  }
+} // namespace dealii
 
 namespace dealii
 {
@@ -495,6 +640,12 @@ public:
   virtual const SparseMatrixType &
   get_system_matrix() const = 0;
 
+  virtual const SparseMatrixType &
+  get_system_matrix(const MPI_Comm comm) const = 0;
+
+  virtual bool
+  supports_sub_communicator() const = 0;
+
   virtual void
   compute_inverse_diagonal(VectorType &diagonal) const = 0;
 
@@ -635,6 +786,18 @@ public:
     return tmp_matrix;
   }
 
+  const SparseMatrixType &
+  get_system_matrix(const MPI_Comm comm) const override
+  {
+    (void)comm;
+    return get_system_matrix();
+  }
+
+  virtual bool
+  supports_sub_communicator() const
+  {
+    return false;
+  }
 
 private:
   mutable SparseMatrixType                                   mass_matrix;
@@ -709,12 +872,18 @@ public:
   const SparseMatrixType &
   get_system_matrix() const override
   {
-    if (system_matrix.m() == 0 && system_matrix.n() == 0)
+    return get_system_matrix(matrix_free.get_task_info().communicator);
+  }
+
+  const SparseMatrixType &
+  get_system_matrix(const MPI_Comm comm) const override
+  {
+    if (comm != MPI_COMM_NULL && system_matrix.m() == 0 &&
+        system_matrix.n() == 0)
       {
         const auto &dof_handler = this->matrix_free.get_dof_handler();
-        TrilinosWrappers::SparsityPattern dsp(
-          dof_handler.locally_owned_dofs(),
-          dof_handler.get_triangulation().get_communicator());
+        TrilinosWrappers::SparsityPattern dsp(dof_handler.locally_owned_dofs(),
+                                              comm);
         DoFTools::make_sparsity_pattern(dof_handler, dsp, *constraints);
         dsp.compress();
         system_matrix.reinit(dsp);
@@ -728,6 +897,12 @@ public:
       this);
 
     return system_matrix;
+  }
+
+  virtual bool
+  supports_sub_communicator() const
+  {
+    return true;
   }
 
   void
@@ -942,6 +1117,58 @@ public:
       std::make_unique<MGTransferType>(transfers, [&](const auto l, auto &vec) {
         this->mg_operators[l]->initialize_dof_vector(vec);
       });
+
+    this->sub_comm = create_sub_comm(*mg_dof_handlers[min_level]);
+  }
+
+  template <typename MeshType>
+  static std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>>
+  create_sub_comm(const MeshType &mesh)
+  {
+    const auto comm     = mesh.get_communicator();
+    auto       sub_comm = new MPI_Comm;
+
+    unsigned int cell_counter = 0;
+
+    for (const auto &cell : mesh.active_cell_iterators())
+      if (cell->is_locally_owned())
+        cell_counter++;
+
+    const unsigned int rank = Utilities::MPI::this_mpi_process(comm);
+
+#if DEBUG
+    const auto t = Utilities::MPI::gather(comm, cell_counter);
+
+    if (rank == 0)
+      {
+        for (const auto tt : t)
+          std::cout << tt << " ";
+        std::cout << std::endl;
+      }
+#endif
+
+    const int temp = cell_counter == 0 ? -1 : rank;
+
+    const unsigned int max_rank = Utilities::MPI::max(temp, comm);
+
+    if (max_rank != Utilities::MPI::n_mpi_processes(comm) - 1)
+      {
+        const bool color = rank <= max_rank;
+        MPI_Comm_split(comm, color, rank, sub_comm);
+
+        if (color == false)
+          {
+            MPI_Comm_free(sub_comm);
+            *sub_comm = MPI_COMM_NULL;
+          }
+      }
+
+    return std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>>(
+      sub_comm, [](MPI_Comm *sub_comm) {
+        if (*sub_comm != MPI_COMM_NULL)
+          MPI_Comm_free(sub_comm);
+        delete sub_comm;
+      });
   }
 
   virtual void
@@ -966,34 +1193,39 @@ public:
         smoother_data[level].degree          = additional_data.smoothing_degree;
         smoother_data[level].eig_cg_n_iterations =
           additional_data.smoothing_eig_cg_n_iterations;
+        smoother_data[level].constraints.copy_from(*mg_constraints[level]);
       }
 
     mg_smoother.initialize(mg_operators, smoother_data);
 
     // setup coarse-grid solver
-    coarse_grid_solver_control =
-      std::make_unique<ReductionControl>(additional_data.coarse_grid_maxiter,
-                                         additional_data.coarse_grid_abstol,
-                                         additional_data.coarse_grid_reltol,
-                                         false,
-                                         false);
-    coarse_grid_solver =
-      std::make_unique<SolverCG<VectorType>>(*coarse_grid_solver_control);
+    const auto coarse_comm =
+      mg_operators[min_level]->supports_sub_communicator() ?
+        *sub_comm :
+        mg_dof_handlers[min_level]->get_communicator();
+    if (coarse_comm != MPI_COMM_NULL)
+      {
+        precondition_amg =
+          std::make_unique<TrilinosWrappers::PreconditionAMG>();
 
-    precondition_amg = std::make_unique<TrilinosWrappers::PreconditionAMG>();
-
-    TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-    amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
-    amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
-    amg_data.smoother_type = additional_data.coarse_grid_smoother_type.c_str();
-    precondition_amg->initialize(mg_operators[min_level]->get_system_matrix(),
-                                 amg_data);
-    mg_coarse = std::make_unique<
-      MGCoarseGridIterativeSolver<VectorType,
-                                  SolverCG<VectorType>,
-                                  LevelMatrixType,
-                                  TrilinosWrappers::PreconditionAMG>>(
-      *coarse_grid_solver, *mg_operators[min_level], *precondition_amg);
+        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+        amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
+        amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
+        amg_data.smoother_type =
+          additional_data.coarse_grid_smoother_type.c_str();
+        precondition_amg->initialize(
+          mg_operators[min_level]->get_system_matrix(coarse_comm), amg_data);
+        mg_coarse = std::make_unique<
+          MGCoarseGridApplyPreconditioner<VectorType,
+                                          TrilinosWrappers::PreconditionAMG>>(
+          *precondition_amg);
+      }
+    else
+      {
+        mg_coarse = std::make_unique<
+          MGCoarseGridApplyPreconditioner<VectorType,
+                                          TrilinosWrappers::PreconditionAMG>>();
+      }
 
     // create multigrid algorithm (put level operators, smoothers, transfer
     // operators and smoothers together)
@@ -1035,6 +1267,8 @@ private:
 
   const DoFHandler<dim> &dof_handler;
 
+  std::unique_ptr<MPI_Comm, std::function<void(MPI_Comm *)>> sub_comm;
+
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
   const MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
                                                               mg_constraints;
@@ -1050,10 +1284,6 @@ private:
 
   mutable MGSmootherPrecondition<LevelMatrixType, SmootherType, VectorType>
     mg_smoother;
-
-  mutable std::unique_ptr<ReductionControl> coarse_grid_solver_control;
-
-  mutable std::unique_ptr<SolverCG<VectorType>> coarse_grid_solver;
 
   mutable std::unique_ptr<TrilinosWrappers::PreconditionAMG> precondition_amg;
 
@@ -2380,11 +2610,12 @@ namespace HeatEquation
         }
       else if (params.block_preconditioner_type == "GMG")
         {
+          // tighten, since we want to use a subcommunicator on the coarse grid
+          RepartitioningPolicyTools::DefaultPolicy<dim> policy(true);
           mg_triangulations = MGTransferGlobalCoarseningTools::
-            create_geometric_coarsening_sequence(triangulation);
+            create_geometric_coarsening_sequence(triangulation, policy);
 
-          // TODO: problem during setup of Chebyshev if coarse-grid has 0 DoFs
-          const unsigned int min_level = mg_triangulations.size() == 1 ? 0 : 1;
+          const unsigned int min_level = 0;
           const unsigned int max_level = mg_triangulations.size() - 1;
 
           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
