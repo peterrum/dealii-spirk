@@ -75,3 +75,11 @@ python ../../IRK/scripts/parameters_tolerance.py
 sbatch ../../IRK/experiments-skx/parameters-0768.cmd
 cd ..
 ```
+
+```bash
+mkdir gmg
+cd gmg
+python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
+for cmd in *.cmd; do sbatch $cmd; done
+cd ..
+```

@@ -45,5 +45,9 @@ DEAL_II_SETUP_TARGET("irk-3D")
 target_compile_definitions("irk-3D" PUBLIC -DIRK_DIMENSION=3)
 TARGET_LINK_LIBRARIES("irk-3D" "irk")
 
+ADD_EXECUTABLE( "gmg" "gmg.cc")
+DEAL_II_SETUP_TARGET("gmg")
+TARGET_LINK_LIBRARIES("gmg" "irk")
+
 FILE(GLOB FileList tables/*.txt)
 install(FILES ${FileList} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
