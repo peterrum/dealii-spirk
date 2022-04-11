@@ -25,9 +25,11 @@ using SparseMatrixType = TrilinosWrappers::SparseMatrix;
 
 struct Parameters
 {
-  unsigned int dim           = 2;
-  unsigned int fe_degree     = 1;
-  unsigned int n_refinements = 3;
+  unsigned int dim               = 3;
+  unsigned int fe_degree         = 1;
+  unsigned int n_refinements     = 3; // will be overriden
+  unsigned int min_n_refinements = 3;
+  unsigned int max_n_refinements = 20;
 
   std::string operator_type             = "MatrixFree";
   std::string block_preconditioner_type = "GMG";
@@ -169,7 +171,7 @@ test(const Parameters &params, ConvergenceTable &table)
   VectorTools::create_right_hand_side(
     dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
 
-  ReductionControl     solver_control(1000, 1e-20, 1e-8);
+  ReductionControl     solver_control(1000, 1e-20, 1e-12);
   SolverCG<VectorType> cg(solver_control);
 
   {
@@ -177,13 +179,35 @@ test(const Parameters &params, ConvergenceTable &table)
     cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
   }
 
-  {
-    dst = 0.0;
-    cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
-  }
+  double time = 0.0;
 
-  table.add_value("n_levels", triangulation.n_global_levels() - 1);
+  const unsigned int n_repetitions = 10;
+
+  for (unsigned int counter = 0; counter < n_repetitions; ++counter)
+    {
+      dst = 0.0;
+
+      const auto temp = std::chrono::system_clock::now();
+      cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
+      time += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now() - temp)
+                .count() /
+              1e9;
+    }
+
+  time = Utilities::MPI::sum(time, MPI_COMM_WORLD) /
+         solver_control.last_step() / n_repetitions;
+
+  table.add_value("dim", dim);
+  table.add_value("degree", params.fe_degree);
+  table.add_value("n_procs", Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+  table.add_value("n_cells",
+                  dof_handler.get_triangulation().n_global_active_cells());
+  table.add_value("n_dofs", dof_handler.n_dofs());
+  table.add_value("L", triangulation.n_global_levels());
   table.add_value("n_iterations", solver_control.last_step());
+  table.add_value("time", time);
+  table.set_scientific("time", true);
 }
 
 int
@@ -201,13 +225,13 @@ main(int argc, char **argv)
       pcout << "Running in debug mode!" << std::endl;
 #endif
 
-      unsigned int max_n_refinements = 6;
-
       ConvergenceTable table;
 
       Parameters params;
 
-      for (unsigned int i = 1; i < max_n_refinements; ++i)
+      for (unsigned int i = params.min_n_refinements;
+           i < params.max_n_refinements;
+           ++i)
         {
           params.n_refinements = i;
 
@@ -219,11 +243,19 @@ main(int argc, char **argv)
             AssertThrow(false, ExcNotImplemented());
 
           if (pcout.is_active())
-            table.write_text(pcout.get_stream());
+            {
+              pcout << std::endl;
+              table.write_text(pcout.get_stream());
+              pcout << std::endl;
+            }
         }
 
       if (pcout.is_active())
-        table.write_text(pcout.get_stream());
+        {
+          pcout << std::endl;
+          table.write_text(pcout.get_stream());
+          pcout << std::endl;
+        }
     }
   catch (std::exception &exc)
     {
