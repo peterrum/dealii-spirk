@@ -605,7 +605,7 @@ namespace TimeIntegrationSchemes
       , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
     {}
 
-    void
+    virtual void
     get_statistics(ConvergenceTable &table,
                    const double      scaling_factor = 1.0) const override
     {
@@ -763,7 +763,25 @@ namespace TimeIntegrationSchemes
       , n_max_iterations(1000)
       , outer_tolerance(outer_tolerance)
       , inner_tolerance(inner_tolerance)
+      , times_preconditioner_solver(n_stages, 0.0)
     {}
+
+    virtual void
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
+    {
+      IRKBase::get_statistics(table, scaling_factor);
+
+      const auto add_time = [&](const std::string label, const double value) {
+        const auto stat = Utilities::MPI::min_max_avg(value, comm);
+        table.add_value(label, stat.avg / 1e9);
+        table.set_scientific(label, true);
+      };
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        add_time("t_prec_solver_" + std::to_string(i),
+                 times_preconditioner_solver[i]);
+    }
 
     void
     solve(VectorType &       solution,
@@ -798,7 +816,8 @@ namespace TimeIntegrationSchemes
                                              op,
                                              block_preconditioner,
                                              time_preconditioner_bc,
-                                             time_preconditioner_solver);
+                                             time_preconditioner_solver,
+                                             times_preconditioner_solver);
         }
 
       const auto time_total = std::chrono::system_clock::now();
@@ -999,7 +1018,8 @@ namespace TimeIntegrationSchemes
                      const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioner,
                      double &                              time_bc,
-                     double &                              time_solver)
+                     double &                              time_solver,
+                     std::vector<double> &                 times_solver)
         : n_max_iterations(100)
         , inner_tolerance(inner_tolerance)
         , cut_off_tolerance(1e-12)
@@ -1011,6 +1031,7 @@ namespace TimeIntegrationSchemes
         , op(op)
         , time_bc(time_bc)
         , time_solver(time_solver)
+        , times_solver(times_solver)
       {
         preconditioners.resize(n_stages);
 
@@ -1047,6 +1068,7 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
+            const auto    time_block = std::chrono::system_clock::now();
             SolverControl solver_control(n_max_iterations, inner_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
@@ -1058,6 +1080,10 @@ namespace TimeIntegrationSchemes
                          *preconditioners[i]);
 
             n_iterations[i] += solver_control.last_step();
+            times_solver[i] +=
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now() - time_block)
+                .count();
           }
 
         this->time_solver +=
@@ -1102,8 +1128,9 @@ namespace TimeIntegrationSchemes
       std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
         preconditioners;
 
-      double &time_bc;
-      double &time_solver;
+      double &             time_bc;
+      double &             time_solver;
+      std::vector<double> &times_solver;
 
       mutable std::vector<unsigned int> n_iterations;
     };
@@ -1113,6 +1140,8 @@ namespace TimeIntegrationSchemes
     const double       inner_tolerance;
 
     mutable double time_step = 0.0;
+
+    mutable std::vector<double> times_preconditioner_solver;
 
     mutable std::unique_ptr<SystemMatrix>   system_matrix;
     mutable std::unique_ptr<Preconditioner> preconditioner;
@@ -1155,6 +1184,24 @@ namespace TimeIntegrationSchemes
     ~IRKStageParallel()
     {
       GrowingVectorMemory<ReshapedVectorType>::release_unused_memory();
+    }
+
+    virtual void
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
+    {
+      IRKBase::get_statistics(table, scaling_factor);
+
+      const auto temp = Utilities::MPI::min_max_avg(
+        Utilities::MPI::all_gather(comm_row, time_preconditioner_solver),
+        this->comm);
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        {
+          const std::string label = "t_prec_solver_" + std::to_string(i);
+          table.add_value(label, temp[i].avg / 1e9);
+          table.set_scientific(label, true);
+        }
     }
 
     void
