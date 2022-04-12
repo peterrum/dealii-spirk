@@ -77,8 +77,8 @@ cd ..
 ```
 
 ```bash
-mkdir gmg
-cd gmg
+mkdir gmg-scaling
+cd gmg-scaling
 python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
