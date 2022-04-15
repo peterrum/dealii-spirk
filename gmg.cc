@@ -196,7 +196,7 @@ test(const Parameters &params, ConvergenceTable &table)
     }
 
   time = Utilities::MPI::sum(time, MPI_COMM_WORLD) /
-         solver_control.last_step() / n_repetitions;
+         solver_control.last_step() / n_repetitions / Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD);
 
   table.add_value("dim", dim);
   table.add_value("degree", params.fe_degree);
