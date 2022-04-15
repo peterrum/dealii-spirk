@@ -83,3 +83,10 @@ python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 ```
+
+```bash
+mkdir -p small-scaling
+cd small-scaling
+python ../../IRK/scripts/small_scaling.py 4 16
+sbatch ../../IRK/experiments-skx/parameters-0768.cmd
+cd ..
