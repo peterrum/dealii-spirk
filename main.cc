@@ -80,7 +80,9 @@ namespace dealii
     SolverGCR(SolverControl &solver_control, const unsigned int GCRmaxit = 40)
       : SolverBase<VectorType>(solver_control)
       , GCRmaxit(GCRmaxit)
-    {}
+    {
+      solver_control.set_max_steps(GCRmaxit);
+    }
 
     template <typename MatrixType, typename PreconditionerType>
     void
@@ -128,8 +130,6 @@ namespace dealii
 
       while (conv == SolverControl::iterate)
         {
-          AssertIndexRange(it, GCRmaxit);
-
           it++;
 
           H_vec(it - 1, x);
@@ -896,6 +896,8 @@ namespace TimeIntegrationSchemes
 
       std::string solver_name = "";
 
+      try
+      {
       if (true)
         {
           solver_name = "GCR";
@@ -916,6 +918,11 @@ namespace TimeIntegrationSchemes
                    system_rhs,
                    *preconditioner);
         }
+      }
+      catch(const SolverControl::NoConvergence & e)
+      {
+        AssertThrow(false, ExcMessage(e.what()));
+      }
 
       this->time_outer_solver +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1092,6 +1099,9 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages; ++i)
           {
             const auto    time_block = std::chrono::system_clock::now();
+
+            if(inner_tolerance > 0.0)
+            {
             SolverControl solver_control(n_max_iterations, inner_tolerance);
             SolverCG<VectorType> solver(solver_control);
 
@@ -1103,6 +1113,14 @@ namespace TimeIntegrationSchemes
                          *preconditioners[i]);
 
             n_iterations[i] += solver_control.last_step();
+            }
+            else
+            {
+              op.reinit(d_vec[i], tau);
+              preconditioners[i]->vmult(tmp_vectors.block(i), dst.block(i));
+              n_iterations[i] += 1;
+            }
+
             times_solver[i] +=
               std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::system_clock::now() - time_block)
@@ -1302,6 +1320,8 @@ namespace TimeIntegrationSchemes
 
       std::string solver_name = "";
 
+      try
+      {
       if (true)
         {
           solver_name = "GCR";
@@ -1322,6 +1342,11 @@ namespace TimeIntegrationSchemes
                    system_rhs,
                    *preconditioner);
         }
+      }
+      catch(const SolverControl::NoConvergence & e)
+      {
+        AssertThrow(false, ExcMessage(e.what()));
+      }
 
       this->time_outer_solver +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1593,6 +1618,8 @@ namespace TimeIntegrationSchemes
 
         temp.reinit(src); // TODO
 
+        if(inner_tolerance > 0.0)
+        {
         std::unique_ptr<SolverControl> solver_control;
 
         if (true)
@@ -1612,7 +1639,15 @@ namespace TimeIntegrationSchemes
                      static_cast<const VectorType &>(dst),
                      preconditioners);
 
-        n_iterations += solver_control->last_step();
+        n_iterations += solver_control->last_step(); 
+        }
+        else
+        {
+          op.reinit(d_vec[my_stage], tau);
+          preconditioners.vmult(static_cast<VectorType &>(temp),
+                                static_cast<const VectorType &>(dst));
+          n_iterations += 1;                       
+        }
 
         this->time_solver +=
           std::chrono::duration_cast<std::chrono::nanoseconds>(
