@@ -341,6 +341,29 @@ namespace dealii
 
 
       MPI_Comm
+      trim_comm(const MPI_Comm &   comm,
+                const int size)
+      {
+        int rank;
+        MPI_Comm_rank(comm, &rank);
+
+        const unsigned int color = rank < size;
+
+        MPI_Comm sub_comm;
+        MPI_Comm_split(comm, color, rank, &sub_comm);
+
+        if (color == 1)
+          return sub_comm;
+        else
+          {
+            MPI_Comm_free(&sub_comm);
+            return MPI_COMM_NULL;
+          }
+      }
+
+
+
+      MPI_Comm
       create_rectangular_comm(const MPI_Comm &   comm,
                               const unsigned int size_x,
                               const unsigned int padding_x)
@@ -1682,6 +1705,7 @@ namespace HeatEquation
     bool do_row_major = true;
     int  padding      = -1; // -1: no padding; 0: use sm;
                             // else valid: padding > irk_stages
+    unsigned int max_ranks = 0;
 
     double outer_tolerance = 1e-8;
     double inner_tolerance = 1e-6;
@@ -1717,6 +1741,7 @@ namespace HeatEquation
       prm.add_parameter("UseSharedMemory", use_sm);
       prm.add_parameter("DoRowMajor", do_row_major);
       prm.add_parameter("Padding", padding);
+      prm.add_parameter("MaxRanks", max_ranks);
 
       prm.add_parameter("DoOutputParaview", do_output_paraview);
 
@@ -2217,10 +2242,22 @@ main(int argc, char **argv)
           HeatEquation::Parameters params;
           params.parse(std::string(argv[i]));
 
+          MPI_Comm comm = MPI_COMM_WORLD;
+
+          if(params.max_ranks != 0 && Utilities::MPI::n_mpi_processes(comm) != params.max_ranks)
+            {
+              AssertThrow(Utilities::MPI::n_mpi_processes(comm) > params.max_ranks, ExcInternalError());
+
+              comm = Utilities::MPI::trim_comm(comm, params.max_ranks);
+
+              if(comm == MPI_COMM_NULL)
+                 continue;
+            }
+
           const unsigned int size_x =
             params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
 
-          AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD),
+          AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(comm),
                       ExcMessage("Not enough ranks have been provided!"));
 
           AssertThrow(
@@ -2237,11 +2274,11 @@ main(int argc, char **argv)
             (params.padding == -1) ?
               size_x :
               ((params.padding == 0) ?
-                 Utilities::MPI::n_procs_of_sm(MPI_COMM_WORLD) :
+                 Utilities::MPI::n_procs_of_sm(comm) :
                  params.padding);
 
           MPI_Comm comm_global =
-            Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD,
+            Utilities::MPI::create_rectangular_comm(comm,
                                                     size_x,
                                                     padding);
 
@@ -2275,7 +2312,7 @@ main(int argc, char **argv)
 
               const unsigned int needed_digits =
                 1 + Utilities::needed_digits(
-                      Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+                      Utilities::MPI::n_mpi_processes(comm));
 
               pcout << "Virtual topology:" << std::endl;
               for (unsigned int i = 0, c = 0; i < size_v; ++i)
@@ -2306,6 +2343,9 @@ main(int argc, char **argv)
               MPI_Comm_free(&comm_column);
               MPI_Comm_free(&comm_row);
               MPI_Comm_free(&comm_global);
+
+              if(comm != MPI_COMM_WORLD)
+                MPI_Comm_free(&comm);
             }
 
           if (pcout.is_active())
