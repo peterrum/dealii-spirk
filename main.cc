@@ -1905,7 +1905,7 @@ namespace TimeIntegrationSchemes
                                                      op_complex,
                                                      preconditioners);
 
-      if (true)
+      if (false)
         {
           ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
 
@@ -1914,6 +1914,8 @@ namespace TimeIntegrationSchemes
                    system_solution,
                    system_rhs,
                    outer_preconditioner);
+
+          std::cout << "<<< " << solver_control.last_step() << std::endl;
         }
       else
         {
