@@ -1733,11 +1733,14 @@ namespace TimeIntegrationSchemes
       : comm(comm)
       , n_stages(n_stages)
       , A_inv(load_matrix_from_file(n_stages, "A_inv"))
-      , T(load_matrix_from_file(n_stages, "T"))
-      , T_inv(load_matrix_from_file(n_stages, "T_inv"))
+      , T_re(load_matrix_from_file(n_stages, "T_re"))
+      , T_im(load_matrix_from_file(n_stages, "T_im"))
+      , T_inv_re(load_matrix_from_file(n_stages, "T_inv_re"))
+      , T_inv_im(load_matrix_from_file(n_stages, "T_inv_im"))
       , b_vec(load_vector_from_file(n_stages, "b_vec_"))
       , c_vec(load_vector_from_file(n_stages, "c_vec_"))
-      , d_vec(load_vector_from_file(n_stages, "D_vec_"))
+      , d_vec_re(load_vector_from_file(n_stages, "D_vec_re_"))
+      , d_vec_im(load_vector_from_file(n_stages, "D_vec_im_"))
       , op(op)
       , block_preconditioner(block_preconditioner)
       , evaluate_rhs_function(evaluate_rhs_function)
@@ -1760,11 +1763,14 @@ namespace TimeIntegrationSchemes
     const MPI_Comm                                    comm;
     const unsigned int                                n_stages;
     const FullMatrix<typename VectorType::value_type> A_inv;
-    const FullMatrix<typename VectorType::value_type> T;
-    const FullMatrix<typename VectorType::value_type> T_inv;
+    const FullMatrix<typename VectorType::value_type> T_re;
+    const FullMatrix<typename VectorType::value_type> T_im;
+    const FullMatrix<typename VectorType::value_type> T_inv_re;
+    const FullMatrix<typename VectorType::value_type> T_inv_im;
     const Vector<typename VectorType::value_type>     b_vec;
     const Vector<typename VectorType::value_type>     c_vec;
-    const Vector<typename VectorType::value_type>     d_vec;
+    const Vector<typename VectorType::value_type>     d_vec_re;
+    const Vector<typename VectorType::value_type>     d_vec_im;
 
     const MassLaplaceOperator &           op;
     const PreconditionerBase<VectorType> &block_preconditioner;
@@ -1864,8 +1870,7 @@ namespace TimeIntegrationSchemes
           }
       }
 
-
-      AssertThrow(false, ExcNotImplemented());
+      solve(system_solution, system_rhs);
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
@@ -1877,11 +1882,82 @@ namespace TimeIntegrationSchemes
     }
 
   private:
+    void
+    solve(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      std::vector<BlockVectorType> src_block;
+      std::vector<BlockVectorType> dst_block;
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned int j = 0; j < n_stages; ++j)
+          {
+            src_block[i].block(0).add(T_inv_re(i, j), src.block(j));
+            src_block[i].block(1).add(T_inv_im(i, j), src.block(j));
+          }
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        {
+          SolverControl solver_control(n_max_iterations,
+                                       outer_tolerance * src.block(i).size());
+          SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
+            solver_control);
+
+          solver.solve(*system_matrix,
+                       dst_block[i],
+                       src_block[i],
+                       *preconditioners[i]);
+        }
+
+      dst = 0;
+      for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned int j = 0; j < n_stages; ++j)
+          dst.block(i).add(T_re(i, j),
+                           dst_block[j].block(0),
+                           -T_im(i, j),
+                           dst_block[j].block(1));
+    }
+
+
+    class SystemMatrix
+    {
+    public:
+      SystemMatrix()
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        (void)dst;
+        (void)src;
+      }
+
+    private:
+    };
+
+    class Preconditioner
+    {
+    public:
+      Preconditioner()
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        (void)dst;
+        (void)src;
+      }
+
+    private:
+    };
+
     const unsigned int n_max_iterations;
     const double       outer_tolerance;
     const double       inner_tolerance;
 
     mutable double time_step = 0.0;
+
+    std::unique_ptr<SystemMatrix>              system_matrix;
+    std::vector<std::unique_ptr<SystemMatrix>> preconditioners;
   };
 
 
