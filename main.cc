@@ -80,7 +80,9 @@ namespace dealii
     SolverGCR(SolverControl &solver_control, const unsigned int GCRmaxit = 40)
       : SolverBase<VectorType>(solver_control)
       , GCRmaxit(GCRmaxit)
-    {}
+    {
+      solver_control.set_max_steps(GCRmaxit);
+    }
 
     template <typename MatrixType, typename PreconditionerType>
     void
@@ -128,8 +130,6 @@ namespace dealii
 
       while (conv == SolverControl::iterate)
         {
-          AssertIndexRange(it, GCRmaxit);
-
           it++;
 
           H_vec(it - 1, x);
@@ -336,6 +336,28 @@ namespace dealii
                        rank,
                        &col_comm);
         return col_comm;
+      }
+
+
+
+      MPI_Comm
+      trim_comm(const MPI_Comm &comm, const int size)
+      {
+        int rank;
+        MPI_Comm_rank(comm, &rank);
+
+        const unsigned int color = rank < size;
+
+        MPI_Comm sub_comm;
+        MPI_Comm_split(comm, color, rank, &sub_comm);
+
+        if (color == 1)
+          return sub_comm;
+        else
+          {
+            MPI_Comm_free(&sub_comm);
+            return MPI_COMM_NULL;
+          }
       }
 
 
@@ -873,25 +895,32 @@ namespace TimeIntegrationSchemes
 
       std::string solver_name = "";
 
-      if (true)
+      try
         {
-          solver_name = "GCR";
+          if (true)
+            {
+              solver_name = "GCR";
 
-          SolverGCR<BlockVectorType> cg(solver_control);
-          cg.solve(*system_matrix,
-                   system_solution,
-                   system_rhs,
-                   *preconditioner);
+              SolverGCR<BlockVectorType> cg(solver_control);
+              cg.solve(*system_matrix,
+                       system_solution,
+                       system_rhs,
+                       *preconditioner);
+            }
+          else
+            {
+              solver_name = "FGMRES";
+
+              SolverFGMRES<BlockVectorType> cg(solver_control);
+              cg.solve(*system_matrix,
+                       system_solution,
+                       system_rhs,
+                       *preconditioner);
+            }
         }
-      else
+      catch (const SolverControl::NoConvergence &e)
         {
-          solver_name = "FGMRES";
-
-          SolverFGMRES<BlockVectorType> cg(solver_control);
-          cg.solve(*system_matrix,
-                   system_solution,
-                   system_rhs,
-                   *preconditioner);
+          AssertThrow(false, ExcMessage(e.what()));
         }
 
       this->time_outer_solver +=
@@ -1068,18 +1097,29 @@ namespace TimeIntegrationSchemes
 
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            const auto    time_block = std::chrono::system_clock::now();
-            SolverControl solver_control(n_max_iterations, inner_tolerance);
-            SolverCG<VectorType> solver(solver_control);
+            const auto time_block = std::chrono::system_clock::now();
 
-            op.reinit(d_vec[i], tau);
+            if (inner_tolerance > 0.0)
+              {
+                SolverControl solver_control(n_max_iterations, inner_tolerance);
+                SolverCG<VectorType> solver(solver_control);
 
-            solver.solve(op,
-                         tmp_vectors.block(i),
-                         dst.block(i),
-                         *preconditioners[i]);
+                op.reinit(d_vec[i], tau);
 
-            n_iterations[i] += solver_control.last_step();
+                solver.solve(op,
+                             tmp_vectors.block(i),
+                             dst.block(i),
+                             *preconditioners[i]);
+
+                n_iterations[i] += solver_control.last_step();
+              }
+            else
+              {
+                op.reinit(d_vec[i], tau);
+                preconditioners[i]->vmult(tmp_vectors.block(i), dst.block(i));
+                n_iterations[i] += 1;
+              }
+
             times_solver[i] +=
               std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::system_clock::now() - time_block)
@@ -1279,25 +1319,32 @@ namespace TimeIntegrationSchemes
 
       std::string solver_name = "";
 
-      if (true)
+      try
         {
-          solver_name = "GCR";
+          if (true)
+            {
+              solver_name = "GCR";
 
-          SolverGCR<ReshapedVectorType> cg(solver_control);
-          cg.solve(*system_matrix,
-                   system_solution,
-                   system_rhs,
-                   *preconditioner);
+              SolverGCR<ReshapedVectorType> cg(solver_control);
+              cg.solve(*system_matrix,
+                       system_solution,
+                       system_rhs,
+                       *preconditioner);
+            }
+          else
+            {
+              solver_name = "FGMRES";
+
+              SolverFGMRES<ReshapedVectorType> cg(solver_control);
+              cg.solve(*system_matrix,
+                       system_solution,
+                       system_rhs,
+                       *preconditioner);
+            }
         }
-      else
+      catch (const SolverControl::NoConvergence &e)
         {
-          solver_name = "FGMRES";
-
-          SolverFGMRES<ReshapedVectorType> cg(solver_control);
-          cg.solve(*system_matrix,
-                   system_solution,
-                   system_rhs,
-                   *preconditioner);
+          AssertThrow(false, ExcMessage(e.what()));
         }
 
       this->time_outer_solver +=
@@ -1570,26 +1617,37 @@ namespace TimeIntegrationSchemes
 
         temp.reinit(src); // TODO
 
-        std::unique_ptr<SolverControl> solver_control;
+        if (inner_tolerance > 0.0)
+          {
+            std::unique_ptr<SolverControl> solver_control;
 
-        if (true)
-          solver_control =
-            std::make_unique<SolverControl>(n_max_iterations, inner_tolerance);
+            if (true)
+              solver_control = std::make_unique<SolverControl>(n_max_iterations,
+                                                               inner_tolerance);
+            else
+              solver_control =
+                std::make_unique<SPSolverControl>(comm_row,
+                                                  n_max_iterations,
+                                                  inner_tolerance);
+
+            SolverCG<VectorType> solver(*solver_control);
+
+            op.reinit(d_vec[my_stage], tau);
+
+            solver.solve(op,
+                         static_cast<VectorType &>(temp),
+                         static_cast<const VectorType &>(dst),
+                         preconditioners);
+
+            n_iterations += solver_control->last_step();
+          }
         else
-          solver_control = std::make_unique<SPSolverControl>(comm_row,
-                                                             n_max_iterations,
-                                                             inner_tolerance);
-
-        SolverCG<VectorType> solver(*solver_control);
-
-        op.reinit(d_vec[my_stage], tau);
-
-        solver.solve(op,
-                     static_cast<VectorType &>(temp),
-                     static_cast<const VectorType &>(dst),
-                     preconditioners);
-
-        n_iterations += solver_control->last_step();
+          {
+            op.reinit(d_vec[my_stage], tau);
+            preconditioners.vmult(static_cast<VectorType &>(temp),
+                                  static_cast<const VectorType &>(dst));
+            n_iterations += 1;
+          }
 
         this->time_solver +=
           std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1682,6 +1740,7 @@ namespace HeatEquation
     bool do_row_major = true;
     int  padding      = -1; // -1: no padding; 0: use sm;
                             // else valid: padding > irk_stages
+    unsigned int max_ranks = 0;
 
     double outer_tolerance = 1e-8;
     double inner_tolerance = 1e-6;
@@ -1717,6 +1776,7 @@ namespace HeatEquation
       prm.add_parameter("UseSharedMemory", use_sm);
       prm.add_parameter("DoRowMajor", do_row_major);
       prm.add_parameter("Padding", padding);
+      prm.add_parameter("MaxRanks", max_ranks);
 
       prm.add_parameter("DoOutputParaview", do_output_paraview);
 
@@ -2217,10 +2277,25 @@ main(int argc, char **argv)
           HeatEquation::Parameters params;
           params.parse(std::string(argv[i]));
 
+          MPI_Comm comm = MPI_COMM_WORLD;
+
+          if (params.max_ranks != 0 &&
+              Utilities::MPI::n_mpi_processes(comm) != params.max_ranks)
+            {
+              AssertThrow(Utilities::MPI::n_mpi_processes(comm) >
+                            params.max_ranks,
+                          ExcInternalError());
+
+              comm = Utilities::MPI::trim_comm(comm, params.max_ranks);
+
+              if (comm == MPI_COMM_NULL)
+                continue;
+            }
+
           const unsigned int size_x =
             params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
 
-          AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD),
+          AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(comm),
                       ExcMessage("Not enough ranks have been provided!"));
 
           AssertThrow(
@@ -2236,14 +2311,11 @@ main(int argc, char **argv)
           const unsigned int padding =
             (params.padding == -1) ?
               size_x :
-              ((params.padding == 0) ?
-                 Utilities::MPI::n_procs_of_sm(MPI_COMM_WORLD) :
-                 params.padding);
+              ((params.padding == 0) ? Utilities::MPI::n_procs_of_sm(comm) :
+                                       params.padding);
 
           MPI_Comm comm_global =
-            Utilities::MPI::create_rectangular_comm(MPI_COMM_WORLD,
-                                                    size_x,
-                                                    padding);
+            Utilities::MPI::create_rectangular_comm(comm, size_x, padding);
 
           if (comm_global != MPI_COMM_NULL)
             {
@@ -2274,8 +2346,8 @@ main(int argc, char **argv)
 
 
               const unsigned int needed_digits =
-                1 + Utilities::needed_digits(
-                      Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
+                1 +
+                Utilities::needed_digits(Utilities::MPI::n_mpi_processes(comm));
 
               pcout << "Virtual topology:" << std::endl;
               for (unsigned int i = 0, c = 0; i < size_v; ++i)
@@ -2306,6 +2378,9 @@ main(int argc, char **argv)
               MPI_Comm_free(&comm_column);
               MPI_Comm_free(&comm_row);
               MPI_Comm_free(&comm_global);
+
+              if (comm != MPI_COMM_WORLD)
+                MPI_Comm_free(&comm);
             }
 
           if (pcout.is_active())
