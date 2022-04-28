@@ -6,6 +6,6 @@
     "TimeStepSize" : "0.0",
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
-    "BlockPreconditionerType" : "GMG"
+    "BlockPreconditionerType" : "AMG"
 }
 

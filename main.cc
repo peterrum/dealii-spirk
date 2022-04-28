@@ -2055,8 +2055,10 @@ namespace TimeIntegrationSchemes
         // solve blocks
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            SolverControl solver_control(n_max_iterations,
-                                         outer_tolerance * src.block(i).size());
+            // SolverControl solver_control(n_max_iterations,
+            //                             outer_tolerance *
+            //                             src.block(i).size());
+            ReductionControl solver_control(n_max_iterations, 1e-20, 1e-8);
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
@@ -2127,7 +2129,7 @@ namespace TimeIntegrationSchemes
         temp_0 = src.block(0);
         temp_0 += src.block(1);
 
-        if (false)
+        if (true)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(0), temp_0);
@@ -2146,7 +2148,7 @@ namespace TimeIntegrationSchemes
         temp_0 *= -1.0;
         temp_0 += src.block(1);
 
-        if (false)
+        if (true)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(1), temp_0);
@@ -2216,7 +2218,7 @@ namespace HeatEquation
     double outer_tolerance = 1e-8;
     double inner_tolerance = 1e-6;
 
-    bool do_output_paraview = false;
+    bool do_output_paraview = true;
 
     void
     parse(const std::string file_name)
