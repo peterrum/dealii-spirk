@@ -1905,11 +1905,9 @@ namespace TimeIntegrationSchemes
                                                      op_complex,
                                                      preconditioners);
 
-      if (false)
+      if (true)
         {
-          SolverControl solver_control(n_max_iterations,
-                                       outer_tolerance * n_stages *
-                                         system_rhs.block(0).size());
+          ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
 
           SolverFGMRES<BlockVectorType> cg(solver_control);
           cg.solve(*system_matrix,
@@ -2058,7 +2056,7 @@ namespace TimeIntegrationSchemes
             // SolverControl solver_control(n_max_iterations,
             //                             outer_tolerance *
             //                             src.block(i).size());
-            ReductionControl solver_control(n_max_iterations, 1e-20, 1e-8);
+            ReductionControl solver_control(n_max_iterations, 1e-7, 1e-8);
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
@@ -2129,7 +2127,7 @@ namespace TimeIntegrationSchemes
         temp_0 = src.block(0);
         temp_0 += src.block(1);
 
-        if (true)
+        if (false)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(0), temp_0);
@@ -2148,7 +2146,7 @@ namespace TimeIntegrationSchemes
         temp_0 *= -1.0;
         temp_0 += src.block(1);
 
-        if (true)
+        if (false)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(1), temp_0);
