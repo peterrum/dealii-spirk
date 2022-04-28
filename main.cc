@@ -534,9 +534,6 @@ namespace TimeIntegrationSchemes
 
       // ... solve
       cg.solve(sm, solution, system_rhs, preconditioner);
-
-      pcout << "   " << solver_control.last_step() << " CG iterations."
-            << std::endl;
     }
 
     void
@@ -882,6 +879,9 @@ namespace TimeIntegrationSchemes
           }
       }
 
+      for (unsigned int i = 0; i < n_stages; ++i)
+        std::cout << system_rhs.block(i).l2_norm() << std::endl;
+
       this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
                           std::chrono::system_clock::now() - time_rhs)
                           .count();
@@ -947,6 +947,9 @@ namespace TimeIntegrationSchemes
       pcout << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        std::cout << system_solution.block(i).l2_norm() << std::endl;
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
@@ -1881,7 +1884,13 @@ namespace TimeIntegrationSchemes
           }
       }
 
+      for (unsigned int i = 0; i < n_stages; ++i)
+        std::cout << system_rhs.block(i).l2_norm() << std::endl;
+
       solve(system_solution, system_rhs);
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        std::cout << system_solution.block(i).l2_norm() << std::endl;
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
@@ -1971,7 +1980,10 @@ namespace TimeIntegrationSchemes
         temp_0 += src.block(1);
 
         if (true)
-          preconditioner.vmult(dst.block(0), temp_0);
+          {
+            op.reinit(lambda_re + lambda_im, tau);
+            preconditioner.vmult(dst.block(0), temp_0);
+          }
         else
           {
             ReductionControl     reduction_control(100, 1e-20, 1e-4);
@@ -1987,7 +1999,10 @@ namespace TimeIntegrationSchemes
         temp_0 += src.block(1);
 
         if (true)
-          preconditioner.vmult(dst.block(1), temp_0);
+          {
+            op.reinit(lambda_re + lambda_im, tau);
+            preconditioner.vmult(dst.block(1), temp_0);
+          }
         else
           {
             ReductionControl     reduction_control(100, 1e-20, 1e-4);
