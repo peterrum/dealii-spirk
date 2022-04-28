@@ -1829,6 +1829,7 @@ namespace TimeIntegrationSchemes
 
       if (this->time_step != time_step)
         {
+          this->system_matrix.reset();
           preconditioners.clear();
         }
 
@@ -1836,6 +1837,9 @@ namespace TimeIntegrationSchemes
 
       if (preconditioners.size() == 0)
         {
+          this->system_matrix =
+            std::make_unique<SystemMatrix>(true, A_inv, time_step, op);
+
           preconditioners.resize(n_stages);
 
           for (unsigned int i = 0; i < n_stages; ++i)
@@ -1901,7 +1905,22 @@ namespace TimeIntegrationSchemes
                                                      op_complex,
                                                      preconditioners);
 
-      outer_preconditioner.vmult(system_solution, system_rhs);
+      if (true)
+        {
+          SolverControl solver_control(n_max_iterations,
+                                       outer_tolerance * n_stages *
+                                         system_rhs.block(0).size());
+
+          SolverFGMRES<BlockVectorType> cg(solver_control);
+          cg.solve(*system_matrix,
+                   system_solution,
+                   system_rhs,
+                   outer_preconditioner);
+        }
+      else
+        {
+          outer_preconditioner.vmult(system_solution, system_rhs);
+        }
 
       for (unsigned int i = 0; i < n_stages; ++i)
         std::cout << system_solution.block(i).l2_norm() << std::endl;
@@ -1916,6 +1935,64 @@ namespace TimeIntegrationSchemes
     }
 
   private:
+    class SystemMatrix
+    {
+    public:
+      SystemMatrix(const bool do_reduce_number_of_vmults,
+                   const FullMatrix<typename VectorType::value_type> &A_inv,
+                   const double                                       time_step,
+                   const MassLaplaceOperator &                        op)
+        : n_stages(A_inv.m())
+        , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
+        , A_inv(A_inv)
+        , time_step(time_step)
+        , op(op)
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        if (do_reduce_number_of_vmults == false)
+          {
+            dst = 0;
+            for (unsigned int i = 0; i < n_stages; ++i)
+              for (unsigned int j = 0; j < n_stages; ++j)
+                {
+                  const unsigned int k = (j + i) % n_stages;
+                  if (j == 0) // first process diagonal
+                    op.vmult(dst.block(i),
+                             src.block(k),
+                             A_inv(i, k),
+                             time_step);
+                  else // proceed with off-diagonals
+                    op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
+                }
+          }
+        else
+          {
+            VectorType tmp;
+            tmp.reinit(src.block(0));
+            for (unsigned int i = 0; i < n_stages; ++i)
+              op.vmult(dst.block(i), src.block(i), 0.0, time_step);
+
+            for (unsigned int i = 0; i < n_stages; ++i)
+              {
+                op.vmult(tmp, src.block(i), 1.0, 0.0);
+
+                for (unsigned int j = 0; j < n_stages; ++j)
+                  dst.block(j).add(A_inv(j, i), tmp);
+              }
+          }
+      }
+
+    private:
+      const unsigned int n_stages;
+      const bool         do_reduce_number_of_vmults;
+      const FullMatrix<typename VectorType::value_type> &A_inv;
+      const double                                       time_step;
+      const MassLaplaceOperator &                        op;
+    };
+
     class OuterPreconditioner
     {
     public:
@@ -2050,7 +2127,7 @@ namespace TimeIntegrationSchemes
         temp_0 = src.block(0);
         temp_0 += src.block(1);
 
-        if (true)
+        if (false)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(0), temp_0);
@@ -2069,7 +2146,7 @@ namespace TimeIntegrationSchemes
         temp_0 *= -1.0;
         temp_0 += src.block(1);
 
-        if (true)
+        if (false)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(1), temp_0);
@@ -2102,6 +2179,8 @@ namespace TimeIntegrationSchemes
     mutable double time_step = 0.0;
 
     const ComplexMassLaplaceOperator &op_complex;
+
+    mutable std::unique_ptr<SystemMatrix> system_matrix;
     mutable std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
       preconditioners;
   };
