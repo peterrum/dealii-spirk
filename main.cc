@@ -1905,7 +1905,7 @@ namespace TimeIntegrationSchemes
                                                      op_complex,
                                                      preconditioners);
 
-      if (true)
+      if (false)
         {
           SolverControl solver_control(n_max_iterations,
                                        outer_tolerance * n_stages *
