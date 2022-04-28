@@ -599,6 +599,67 @@ namespace TimeIntegrationSchemes
 
 
 
+  FullMatrix<typename VectorType::value_type>
+  load_matrix_from_file(const unsigned int n_stages, const std::string label)
+  {
+    FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
+
+    std::string file_name = label + std::to_string(n_stages) + ".txt";
+
+    std::ifstream fin;
+    fin.open(file_name);
+
+    if (fin.fail())
+      fin.open("../" + file_name);
+
+    AssertThrow(fin.fail() == false,
+                ExcMessage("File with the name " + file_name +
+                           " could not be found!"));
+
+    unsigned int m, n;
+    fin >> m >> n;
+
+    AssertDimension(m, n_stages);
+    AssertDimension(n, n_stages);
+
+    for (unsigned int i = 0; i < n_stages; ++i)
+      for (unsigned j = 0; j < n_stages; ++j)
+        fin >> result[i][j];
+
+    return result;
+  }
+
+  Vector<typename VectorType::value_type>
+  load_vector_from_file(const unsigned int n_stages, const std::string label)
+  {
+    Vector<typename VectorType::value_type> result(n_stages);
+
+    std::string file_name = label + std::to_string(n_stages) + ".txt";
+
+    std::ifstream fin;
+    fin.open(file_name);
+
+    if (fin.fail())
+      fin.open("../" + file_name);
+
+    AssertThrow(fin.fail() == false,
+                ExcMessage("File with the name " + file_name +
+                           " could not be found!"));
+
+    unsigned int m, n;
+    fin >> m >> n;
+
+    AssertDimension(m, 1);
+    AssertDimension(n, n_stages);
+
+    for (unsigned int i = 0; i < n_stages; ++i)
+      fin >> result[i];
+
+    return result;
+  }
+
+
+
   /**
    * IRK base class.
    */
@@ -669,67 +730,6 @@ namespace TimeIntegrationSchemes
       time_preconditioner_solver = 0.0;
     }
 
-  private:
-    static FullMatrix<typename VectorType::value_type>
-    load_matrix_from_file(const unsigned int n_stages, const std::string label)
-    {
-      FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
-
-      std::string file_name = label + std::to_string(n_stages) + ".txt";
-
-      std::ifstream fin;
-      fin.open(file_name);
-
-      if (fin.fail())
-        fin.open("../" + file_name);
-
-      AssertThrow(fin.fail() == false,
-                  ExcMessage("File with the name " + file_name +
-                             " could not be found!"));
-
-      unsigned int m, n;
-      fin >> m >> n;
-
-      AssertDimension(m, n_stages);
-      AssertDimension(n, n_stages);
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        for (unsigned j = 0; j < n_stages; ++j)
-          fin >> result[i][j];
-
-      return result;
-    }
-
-    static Vector<typename VectorType::value_type>
-    load_vector_from_file(const unsigned int n_stages, const std::string label)
-    {
-      Vector<typename VectorType::value_type> result(n_stages);
-
-      std::string file_name = label + std::to_string(n_stages) + ".txt";
-
-      std::ifstream fin;
-      fin.open(file_name);
-
-      if (fin.fail())
-        fin.open("../" + file_name);
-
-      AssertThrow(fin.fail() == false,
-                  ExcMessage("File with the name " + file_name +
-                             " could not be found!"));
-
-      unsigned int m, n;
-      fin >> m >> n;
-
-      AssertDimension(m, 1);
-      AssertDimension(n, n_stages);
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        fin >> result[i];
-
-      return result;
-    }
-
-  protected:
     const MPI_Comm     comm;
     const unsigned int n_stages;
     const bool         do_reduce_number_of_vmults;
