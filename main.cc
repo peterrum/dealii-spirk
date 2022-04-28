@@ -1793,6 +1793,7 @@ namespace TimeIntegrationSchemes
                const double                          inner_tolerance,
                const unsigned int                    n_stages,
                const MassLaplaceOperator &           op,
+               const ComplexMassLaplaceOperator &    op_complex,
                const PreconditionerBase<VectorType> &block_preconditioner,
                const std::function<void(const double, VectorType &)>
                  &evaluate_rhs_function)
@@ -1804,6 +1805,7 @@ namespace TimeIntegrationSchemes
       , n_max_iterations(1000)
       , outer_tolerance(outer_tolerance)
       , inner_tolerance(inner_tolerance)
+      , op_complex(op_complex)
     {}
 
     virtual void
@@ -1824,14 +1826,23 @@ namespace TimeIntegrationSchemes
 
       if (this->time_step != time_step)
         {
-          // this->system_matrix.reset();
-          // this->preconditioner.reset();
-          AssertThrow(false, ExcNotImplemented());
+          preconditioners.clear();
         }
 
       this->time_step = time_step;
 
-      AssertThrow(false, ExcNotImplemented());
+      if (preconditioners.size() == 0)
+        {
+          preconditioners.resize(n_stages);
+
+          for (unsigned int i = 0; i < n_stages; ++i)
+            {
+              op.reinit(d_vec_re[i] + d_vec_im[i], time_step);
+
+              preconditioners[i] = this->block_preconditioner.clone();
+              preconditioners[i]->reinit();
+            }
+        }
 
       BlockVectorType system_rhs(n_stages);      // TODO
       BlockVectorType system_solution(n_stages); //
@@ -1885,9 +1896,22 @@ namespace TimeIntegrationSchemes
     void
     solve(BlockVectorType &dst, const BlockVectorType &src) const
     {
-      std::vector<BlockVectorType> src_block;
-      std::vector<BlockVectorType> dst_block;
+      std::vector<BlockVectorType> src_block(n_stages);
+      std::vector<BlockVectorType> dst_block(n_stages);
 
+      for (unsigned int i = 0; i < n_stages; ++i)
+        {
+          src_block[i].reinit(2);
+          dst_block[i].reinit(2);
+
+          for (unsigned int j = 0; j < 2; ++j)
+            {
+              src_block[i].block(j).reinit(src.block(0));
+              dst_block[i].block(j).reinit(src.block(0));
+            }
+        }
+
+      // apply Tinv
       for (unsigned int i = 0; i < n_stages; ++i)
         for (unsigned int j = 0; j < n_stages; ++j)
           {
@@ -1895,6 +1919,7 @@ namespace TimeIntegrationSchemes
             src_block[i].block(1).add(T_inv_im(i, j), src.block(j));
           }
 
+      // solve blocks
       for (unsigned int i = 0; i < n_stages; ++i)
         {
           SolverControl solver_control(n_max_iterations,
@@ -1902,12 +1927,15 @@ namespace TimeIntegrationSchemes
           SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
             solver_control);
 
-          solver.solve(*system_matrix,
-                       dst_block[i],
-                       src_block[i],
-                       *preconditioners[i]);
+          op_complex.reinit(d_vec_re[i], d_vec_im[i], this->time_step);
+
+          Preconditioner presb(
+            op, *preconditioners[i], d_vec_re[i], d_vec_im[i], this->time_step);
+
+          solver.solve(op_complex, dst_block[i], src_block[i], presb);
         }
 
+      // apply T
       dst = 0;
       for (unsigned int i = 0; i < n_stages; ++i)
         for (unsigned int j = 0; j < n_stages; ++j)
@@ -1917,37 +1945,68 @@ namespace TimeIntegrationSchemes
                            dst_block[j].block(1));
     }
 
-
-    class SystemMatrix
-    {
-    public:
-      SystemMatrix()
-      {}
-
-      void
-      vmult(BlockVectorType &dst, const BlockVectorType &src) const
-      {
-        (void)dst;
-        (void)src;
-      }
-
-    private:
-    };
-
     class Preconditioner
     {
     public:
-      Preconditioner()
+      Preconditioner(const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &preconditioner,
+                     const double                          lambda_re,
+                     const double                          lambda_im,
+                     const double                          tau)
+        : op(op)
+        , preconditioner(preconditioner)
+        , lambda_re(lambda_re)
+        , lambda_im(lambda_im)
+        , tau(tau)
       {}
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        (void)dst;
-        (void)src;
+        VectorType temp_0, temp_1;
+        temp_0.reinit(src.block(0));
+        temp_1.reinit(src.block(0));
+
+        temp_0 = src.block(0);
+        temp_0 += src.block(1);
+
+        if (true)
+          preconditioner.vmult(dst.block(0), temp_0);
+        else
+          {
+            ReductionControl     reduction_control(100, 1e-20, 1e-4);
+            SolverCG<VectorType> solver(reduction_control);
+
+            op.reinit(lambda_re + lambda_im, tau);
+            solver.solve(op, dst.block(0), temp_0, preconditioner);
+          }
+
+        op.reinit(lambda_im, 0.0);
+        op.vmult(temp_0, dst.block(0));
+        temp_0 *= -1.0;
+        temp_0 += src.block(1);
+
+        if (true)
+          preconditioner.vmult(dst.block(1), temp_0);
+        else
+          {
+            ReductionControl     reduction_control(100, 1e-20, 1e-4);
+            SolverCG<VectorType> solver(reduction_control);
+
+            op.reinit(lambda_re + lambda_im, tau);
+            solver.solve(op, dst.block(1), temp_0, preconditioner);
+          }
+
+        dst.block(0) -= dst.block(1);
       }
 
     private:
+      const MassLaplaceOperator &           op;
+      const PreconditionerBase<VectorType> &preconditioner;
+
+      const double lambda_re;
+      const double lambda_im;
+      const double tau;
     };
 
     const unsigned int n_max_iterations;
@@ -1956,8 +2015,9 @@ namespace TimeIntegrationSchemes
 
     mutable double time_step = 0.0;
 
-    std::unique_ptr<SystemMatrix>              system_matrix;
-    std::vector<std::unique_ptr<SystemMatrix>> preconditioners;
+    const ComplexMassLaplaceOperator &op_complex;
+    mutable std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+      preconditioners;
   };
 
 
@@ -2002,7 +2062,7 @@ namespace HeatEquation
       prm.add_parameter("TimeIntegrationScheme",
                         time_integration_scheme,
                         "",
-                        Patterns::Selection("ost|irk|spirk"));
+                        Patterns::Selection("ost|irk|spirk|complex_irk"));
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
@@ -2064,7 +2124,8 @@ namespace HeatEquation
       setup_system();
 
       // select operator
-      std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
+      std::unique_ptr<MassLaplaceOperator>        mass_laplace_operator;
+      std::unique_ptr<ComplexMassLaplaceOperator> complex_mass_laplace_operator;
 
       if (params.operator_type == "MatrixBased")
         mass_laplace_operator =
@@ -2193,15 +2254,26 @@ namespace HeatEquation
             *preconditioner,
             evaluate_rhs_function);
       else if (params.time_integration_scheme == "complex_irk")
-        time_integration_scheme =
-          std::make_unique<TimeIntegrationSchemes::ComplexIRK>(
-            comm_global,
-            params.outer_tolerance,
-            params.inner_tolerance,
-            params.irk_stages,
-            *mass_laplace_operator,
-            *preconditioner,
-            evaluate_rhs_function);
+        {
+          if (params.operator_type == "MatrixFree")
+            complex_mass_laplace_operator = std::make_unique<
+              ComplexMassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
+                                                                 constraints,
+                                                                 quadrature);
+          else
+            AssertThrow(false, ExcNotImplemented());
+
+          time_integration_scheme =
+            std::make_unique<TimeIntegrationSchemes::ComplexIRK>(
+              comm_global,
+              params.outer_tolerance,
+              params.inner_tolerance,
+              params.irk_stages,
+              *mass_laplace_operator,
+              *complex_mass_laplace_operator,
+              *preconditioner,
+              evaluate_rhs_function);
+        }
       else
         Assert(false, ExcNotImplemented());
 

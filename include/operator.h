@@ -440,3 +440,107 @@ private:
 
   mutable SparseMatrixType system_matrix;
 };
+
+
+class ComplexMassLaplaceOperator : public Subscriptor
+{
+public:
+  using Number = typename VectorType::value_type;
+
+  ComplexMassLaplaceOperator()
+    : lambda_re(1.0)
+    , lambda_im(1.0)
+    , tau(1.0)
+  {}
+
+  void
+  reinit(const double lambda_re, const double lambda_im, const double tau) const
+  {
+    this->lambda_re = lambda_re;
+    this->lambda_im = lambda_im;
+    this->tau       = tau;
+  }
+
+  virtual void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+protected:
+  mutable double lambda_re;
+  mutable double lambda_im;
+  mutable double tau;
+};
+
+template <int dim, typename Number>
+class ComplexMassLaplaceOperatorMatrixFree : public ComplexMassLaplaceOperator
+{
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+public:
+  ComplexMassLaplaceOperatorMatrixFree(
+    const DoFHandler<dim> &          dof_handler,
+    const AffineConstraints<Number> &constraints,
+    const Quadrature<dim> &          quadrature)
+  {
+    this->constraints = &constraints;
+
+    typename MatrixFree<dim, Number>::AdditionalData data;
+    data.mapping_update_flags = update_values | update_gradients;
+    matrix_free.reinit(
+      MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+  }
+
+  void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    matrix_free.template cell_loop<BlockVectorType, BlockVectorType>(
+      [&](const auto &, auto &dst, const auto &src, const auto cells) {
+        FECellIntegrator phi_re(matrix_free);
+        FECellIntegrator phi_im(matrix_free);
+
+        for (unsigned int cell = cells.first; cell < cells.second; ++cell)
+          {
+            phi_re.reinit(cell);
+            phi_re.gather_evaluate(src.block(0),
+                                   EvaluationFlags::values |
+                                     EvaluationFlags::gradients);
+            phi_im.reinit(cell);
+            phi_im.gather_evaluate(src.block(1),
+                                   EvaluationFlags::values |
+                                     EvaluationFlags::gradients);
+
+            for (const auto q : phi_re.quadrature_point_indices())
+              {
+                const auto value_re    = phi_re.get_value(q);
+                const auto value_im    = phi_im.get_value(q);
+                const auto gradient_re = phi_re.get_gradient(q);
+                const auto gradient_im = phi_im.get_gradient(q);
+
+                phi_re.submit_value(lambda_re * value_re - lambda_im * value_im,
+                                    q);
+                phi_re.submit_gradient(gradient_re * tau, q);
+
+                phi_im.submit_value(lambda_im * value_re + lambda_re * value_im,
+                                    q);
+                phi_im.submit_gradient(gradient_im * tau, q);
+              }
+
+            phi_re.integrate_scatter(EvaluationFlags::values |
+                                       EvaluationFlags::gradients,
+                                     dst.block(0));
+            phi_im.integrate_scatter(EvaluationFlags::values |
+                                       EvaluationFlags::gradients,
+                                     dst.block(1));
+          }
+      },
+      dst,
+      src,
+      true);
+  }
+
+private:
+  SmartPointer<const AffineConstraints<Number>> constraints;
+
+  MatrixFree<dim, Number> matrix_free;
+
+  mutable SparseMatrixType system_matrix;
+};
