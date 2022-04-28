@@ -1837,9 +1837,6 @@ namespace TimeIntegrationSchemes
 
       if (preconditioners.size() == 0)
         {
-          this->system_matrix =
-            std::make_unique<SystemMatrix>(true, A_inv, time_step, op);
-
           preconditioners.resize(n_stages);
 
           for (unsigned int i = 0; i < n_stages; ++i)
@@ -1909,8 +1906,36 @@ namespace TimeIntegrationSchemes
         {
           ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
 
+          SystemMatrix system_matrix(true, A_inv, time_step, op);
+
           SolverFGMRES<BlockVectorType> cg(solver_control);
-          cg.solve(*system_matrix,
+          cg.solve(system_matrix,
+                   system_solution,
+                   system_rhs,
+                   outer_preconditioner);
+
+          std::cout << "<<< " << solver_control.last_step() << std::endl;
+        }
+      else if (true)
+        {
+          ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
+
+          SystemMatrix2 system_matrix(n_stages,
+                                      n_max_iterations,
+                                      this->time_step,
+                                      outer_tolerance,
+                                      T_inv_re,
+                                      T_inv_im,
+                                      T_re,
+                                      T_im,
+                                      d_vec_re,
+                                      d_vec_im,
+                                      op,
+                                      op_complex,
+                                      preconditioners);
+
+          SolverFGMRES<BlockVectorType> cg(solver_control);
+          cg.solve(system_matrix,
                    system_solution,
                    system_rhs,
                    outer_preconditioner);
@@ -1991,6 +2016,103 @@ namespace TimeIntegrationSchemes
       const FullMatrix<typename VectorType::value_type> &A_inv;
       const double                                       time_step;
       const MassLaplaceOperator &                        op;
+    };
+
+    class SystemMatrix2
+    {
+    public:
+      SystemMatrix2(
+        const unsigned int                                 n_stages,
+        const unsigned int                                 n_max_iterations,
+        const double                                       outer_tolerance,
+        const double                                       time_step,
+        const FullMatrix<typename VectorType::value_type> &T_inv_re,
+        const FullMatrix<typename VectorType::value_type> &T_inv_im,
+        const FullMatrix<typename VectorType::value_type> &T_re,
+        const FullMatrix<typename VectorType::value_type> &T_im,
+        const Vector<typename VectorType::value_type> &    d_vec_re,
+        const Vector<typename VectorType::value_type> &    d_vec_im,
+        const MassLaplaceOperator &                        op,
+        const ComplexMassLaplaceOperator &                 op_complex,
+        std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+          &preconditioners)
+        : n_stages(n_stages)
+        , n_max_iterations(n_max_iterations)
+        , outer_tolerance(outer_tolerance)
+        , time_step(time_step)
+        , T_inv_re(T_inv_re)
+        , T_inv_im(T_inv_im)
+        , T_re(T_re)
+        , T_im(T_im)
+        , d_vec_re(d_vec_re)
+        , d_vec_im(d_vec_im)
+        , op(op)
+        , op_complex(op_complex)
+        , preconditioners(preconditioners)
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        std::vector<BlockVectorType> src_block(n_stages);
+        std::vector<BlockVectorType> dst_block(n_stages);
+
+        for (unsigned int i = 0; i < n_stages; ++i)
+          {
+            src_block[i].reinit(2);
+            dst_block[i].reinit(2);
+
+            for (unsigned int j = 0; j < 2; ++j)
+              {
+                src_block[i].block(j).reinit(src.block(0));
+                dst_block[i].block(j).reinit(src.block(0));
+              }
+          }
+
+        // apply Tinv
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
+            {
+              src_block[i].block(0).add(T_inv_re(i, j), src.block(j));
+              src_block[i].block(1).add(T_inv_im(i, j), src.block(j));
+            }
+
+        // solve blocks
+        for (unsigned int i = 0; i < n_stages; ++i)
+          {
+            op_complex.reinit(d_vec_re[i], d_vec_im[i], this->time_step);
+            op_complex.vmult(dst_block[i], src_block[i]);
+          }
+
+        // apply T
+        dst = 0;
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
+            dst.block(i).add(T_re(i, j),
+                             dst_block[j].block(0),
+                             -T_im(i, j),
+                             dst_block[j].block(1));
+      }
+
+    private:
+      const unsigned int n_stages;
+
+      const unsigned int n_max_iterations;
+      const double       outer_tolerance;
+      const double       time_step;
+
+      const FullMatrix<typename VectorType::value_type> &T_inv_re;
+      const FullMatrix<typename VectorType::value_type> &T_inv_im;
+      const FullMatrix<typename VectorType::value_type> &T_re;
+      const FullMatrix<typename VectorType::value_type> &T_im;
+      const Vector<typename VectorType::value_type> &    d_vec_re;
+      const Vector<typename VectorType::value_type> &    d_vec_im;
+
+      const MassLaplaceOperator &       op;
+      const ComplexMassLaplaceOperator &op_complex;
+
+      std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+        &preconditioners;
     };
 
     class OuterPreconditioner
