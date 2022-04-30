@@ -1836,14 +1836,19 @@ namespace TimeIntegrationSchemes
 
       if (preconditioners.size() == 0)
         {
-          preconditioners.resize(n_stages);
+          preconditioners.resize((n_stages + 1) / 2);
 
-          for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int i = 0, c = 0; i < n_stages; ++c)
             {
               op.reinit(d_vec_re[i] + d_vec_im[i], time_step);
 
-              preconditioners[i] = this->block_preconditioner.clone();
-              preconditioners[i]->reinit();
+              preconditioners[c] = this->block_preconditioner.clone();
+              preconditioners[c]->reinit();
+
+              if (d_vec_im[i] == 0)
+                i += 1;
+              else
+                i += 2;
             }
         }
 
@@ -1946,10 +1951,12 @@ namespace TimeIntegrationSchemes
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        std::vector<BlockVectorType> src_block(n_stages);
-        std::vector<BlockVectorType> dst_block(n_stages);
+        const unsigned int n_stages_reduced = (n_stages + 1) / 2;
 
-        for (unsigned int i = 0; i < n_stages; ++i)
+        std::vector<BlockVectorType> src_block(n_stages_reduced);
+        std::vector<BlockVectorType> dst_block(n_stages_reduced);
+
+        for (unsigned int i = 0; i < n_stages_reduced; ++i)
           {
             src_block[i].reinit(2);
             dst_block[i].reinit(2);
@@ -1962,15 +1969,22 @@ namespace TimeIntegrationSchemes
           }
 
         // apply Tinv
-        for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages; ++j)
-            {
-              src_block[i].block(0).add(T_inv_re(i, j), src.block(j));
-              src_block[i].block(1).add(T_inv_im(i, j), src.block(j));
-            }
+        for (unsigned int i = 0, c = 0; i < n_stages; ++c)
+          {
+            for (unsigned int j = 0; j < n_stages; ++j)
+              {
+                src_block[c].block(0).add(T_inv_re(i, j), src.block(j));
+                src_block[c].block(1).add(T_inv_im(i, j), src.block(j));
+              }
+
+            if (d_vec_im[i] == 0)
+              i += 1;
+            else
+              i += 2;
+          }
 
         // solve blocks
-        for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned int i = 0, c = 0; i < n_stages; ++c)
           {
             ReductionControl solver_control(n_max_iterations, 1e-7, 1e-8);
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
@@ -1979,22 +1993,41 @@ namespace TimeIntegrationSchemes
             op_complex.reinit(d_vec_re[i], d_vec_im[i], this->time_step);
 
             Preconditioner presb(op,
-                                 *preconditioners[i],
+                                 *preconditioners[c],
                                  d_vec_re[i],
                                  d_vec_im[i],
                                  this->time_step);
 
-            solver.solve(op_complex, dst_block[i], src_block[i], presb);
+            solver.solve(op_complex, dst_block[c], src_block[c], presb);
+
+            if (d_vec_im[i] == 0)
+              i += 1;
+            else
+              i += 2;
           }
 
         // apply T
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages; ++j)
-            dst.block(i).add(T_re(i, j),
-                             dst_block[j].block(0),
-                             -T_im(i, j),
-                             dst_block[j].block(1));
+          for (unsigned int j = 0, c = 0; j < n_stages; ++c)
+            {
+              if (d_vec_im[j] == 0)
+                {
+                  dst.block(i).add(T_re(i, j),
+                                   dst_block[c].block(0),
+                                   -T_im(i, j),
+                                   dst_block[c].block(1));
+                  j += 1;
+                }
+              else
+                {
+                  dst.block(i).add(2 * T_re(i, j),
+                                   dst_block[c].block(0),
+                                   -2 * T_im(i, j),
+                                   dst_block[c].block(1));
+                  j += 2;
+                }
+            }
       }
 
     private:
