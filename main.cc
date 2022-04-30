@@ -1829,7 +1829,6 @@ namespace TimeIntegrationSchemes
 
       if (this->time_step != time_step)
         {
-          this->system_matrix.reset();
           preconditioners.clear();
         }
 
@@ -1899,46 +1898,7 @@ namespace TimeIntegrationSchemes
                                                      op_complex,
                                                      preconditioners);
 
-      if (false)
-        {
-          ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
-
-          SystemMatrix system_matrix(true, A_inv, time_step, op);
-
-          SolverFGMRES<BlockVectorType> cg(solver_control);
-          cg.solve(system_matrix,
-                   system_solution,
-                   system_rhs,
-                   outer_preconditioner);
-        }
-      else if (false)
-        {
-          ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
-
-          SystemMatrix2 system_matrix(n_stages,
-                                      n_max_iterations,
-                                      outer_tolerance,
-                                      this->time_step,
-                                      T_inv_re,
-                                      T_inv_im,
-                                      T_re,
-                                      T_im,
-                                      d_vec_re,
-                                      d_vec_im,
-                                      op,
-                                      op_complex,
-                                      preconditioners);
-
-          SolverFGMRES<BlockVectorType> cg(solver_control);
-          cg.solve(system_matrix,
-                   system_solution,
-                   system_rhs,
-                   outer_preconditioner);
-        }
-      else
-        {
-          outer_preconditioner.vmult(system_solution, system_rhs);
-        }
+      outer_preconditioner.vmult(system_solution, system_rhs);
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
@@ -1950,175 +1910,6 @@ namespace TimeIntegrationSchemes
     }
 
   private:
-    class SystemMatrix
-    {
-    public:
-      SystemMatrix(const bool do_reduce_number_of_vmults,
-                   const FullMatrix<typename VectorType::value_type> &A_inv,
-                   const double                                       time_step,
-                   const MassLaplaceOperator &                        op)
-        : n_stages(A_inv.m())
-        , do_reduce_number_of_vmults(do_reduce_number_of_vmults)
-        , A_inv(A_inv)
-        , time_step(time_step)
-        , op(op)
-      {}
-
-      void
-      vmult(BlockVectorType &dst, const BlockVectorType &src) const
-      {
-        if (do_reduce_number_of_vmults == false)
-          {
-            dst = 0;
-            for (unsigned int i = 0; i < n_stages; ++i)
-              for (unsigned int j = 0; j < n_stages; ++j)
-                {
-                  const unsigned int k = (j + i) % n_stages;
-                  if (j == 0) // first process diagonal
-                    op.vmult(dst.block(i),
-                             src.block(k),
-                             A_inv(i, k),
-                             time_step);
-                  else // proceed with off-diagonals
-                    op.vmult_add(dst.block(i), src.block(k), A_inv(i, k), 0.0);
-                }
-          }
-        else
-          {
-            VectorType tmp;
-            tmp.reinit(src.block(0));
-            for (unsigned int i = 0; i < n_stages; ++i)
-              op.vmult(dst.block(i), src.block(i), 0.0, time_step);
-
-            for (unsigned int i = 0; i < n_stages; ++i)
-              {
-                op.vmult(tmp, src.block(i), 1.0, 0.0);
-
-                for (unsigned int j = 0; j < n_stages; ++j)
-                  dst.block(j).add(A_inv(j, i), tmp);
-              }
-          }
-      }
-
-    private:
-      const unsigned int n_stages;
-      const bool         do_reduce_number_of_vmults;
-      const FullMatrix<typename VectorType::value_type> &A_inv;
-      const double                                       time_step;
-      const MassLaplaceOperator &                        op;
-    };
-
-    class SystemMatrix2
-    {
-    public:
-      SystemMatrix2(
-        const unsigned int                                 n_stages,
-        const unsigned int                                 n_max_iterations,
-        const double                                       outer_tolerance,
-        const double                                       time_step,
-        const FullMatrix<typename VectorType::value_type> &T_inv_re,
-        const FullMatrix<typename VectorType::value_type> &T_inv_im,
-        const FullMatrix<typename VectorType::value_type> &T_re,
-        const FullMatrix<typename VectorType::value_type> &T_im,
-        const Vector<typename VectorType::value_type> &    d_vec_re,
-        const Vector<typename VectorType::value_type> &    d_vec_im,
-        const MassLaplaceOperator &                        op,
-        const ComplexMassLaplaceOperator &                 op_complex,
-        std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
-          &preconditioners)
-        : n_stages(n_stages)
-        , n_max_iterations(n_max_iterations)
-        , outer_tolerance(outer_tolerance)
-        , time_step(time_step)
-        , T_inv_re(T_inv_re)
-        , T_inv_im(T_inv_im)
-        , T_re(T_re)
-        , T_im(T_im)
-        , d_vec_re(d_vec_re)
-        , d_vec_im(d_vec_im)
-        , op(op)
-        , op_complex(op_complex)
-        , preconditioners(preconditioners)
-      {}
-
-      void
-      vmult(BlockVectorType &dst, const BlockVectorType &src) const
-      {
-        std::vector<BlockVectorType> src_block(n_stages);
-        std::vector<BlockVectorType> dst_block(n_stages);
-
-        for (unsigned int i = 0; i < n_stages; ++i)
-          {
-            src_block[i].reinit(2);
-            dst_block[i].reinit(2);
-
-            for (unsigned int j = 0; j < 2; ++j)
-              {
-                src_block[i].block(j).reinit(src.block(0));
-                dst_block[i].block(j).reinit(src.block(0));
-              }
-          }
-
-        // apply Tinv
-        for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages; ++j)
-            {
-              src_block[i].block(0).add(T_inv_re(i, j), src.block(j));
-              src_block[i].block(1).add(T_inv_im(i, j), src.block(j));
-            }
-
-        // solve blocks
-        for (unsigned int i = 0; i < n_stages; ++i)
-          {
-            op_complex.reinit(d_vec_re[i], d_vec_im[i], this->time_step);
-            op_complex.vmult(dst_block[i], src_block[i]);
-          }
-
-          // apply T
-#if DEBUG
-        dst = 0;
-        for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages; ++j)
-            dst.block(i).add(T_im(i, j),
-                             dst_block[j].block(0),
-                             +T_re(i, j),
-                             dst_block[j].block(1));
-
-        for (unsigned int i = 0; i < n_stages; ++i)
-          Assert(dst.block(i).l2_norm() < 1e-8, ExcInternalError());
-#endif
-
-
-        dst = 0;
-        for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages; ++j)
-            dst.block(i).add(T_re(i, j),
-                             dst_block[j].block(0),
-                             -T_im(i, j),
-                             dst_block[j].block(1));
-      }
-
-    private:
-      const unsigned int n_stages;
-
-      const unsigned int n_max_iterations;
-      const double       outer_tolerance;
-      const double       time_step;
-
-      const FullMatrix<typename VectorType::value_type> &T_inv_re;
-      const FullMatrix<typename VectorType::value_type> &T_inv_im;
-      const FullMatrix<typename VectorType::value_type> &T_re;
-      const FullMatrix<typename VectorType::value_type> &T_im;
-      const Vector<typename VectorType::value_type> &    d_vec_re;
-      const Vector<typename VectorType::value_type> &    d_vec_im;
-
-      const MassLaplaceOperator &       op;
-      const ComplexMassLaplaceOperator &op_complex;
-
-      std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
-        &preconditioners;
-    };
-
     class OuterPreconditioner
     {
     public:
@@ -2308,7 +2099,6 @@ namespace TimeIntegrationSchemes
 
     const ComplexMassLaplaceOperator &op_complex;
 
-    mutable std::unique_ptr<SystemMatrix> system_matrix;
     mutable std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
       preconditioners;
   };
