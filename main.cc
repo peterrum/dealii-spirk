@@ -1972,9 +1972,6 @@ namespace TimeIntegrationSchemes
         // solve blocks
         for (unsigned int i = 0; i < n_stages; ++i)
           {
-            // SolverControl solver_control(n_max_iterations,
-            //                             outer_tolerance *
-            //                             src.block(i).size());
             ReductionControl solver_control(n_max_iterations, 1e-7, 1e-8);
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);

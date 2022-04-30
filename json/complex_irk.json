@@ -1,11 +1,11 @@
 { 
     "FEDegree" : 1,
-    "NRefinements" : 5,
+    "NRefinements" : 7,
     "TimeIntegrationScheme" : "complex_irk", 
-    "IRKStages" : "4",
-    "TimeStepSize" : "0.0",
+    "IRKStages" : "5",
+    "TimeStepSize" : "0.1",
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
-    "BlockPreconditionerType" : "AMG"
+    "BlockPreconditionerType" : "GMG"
 }
 
