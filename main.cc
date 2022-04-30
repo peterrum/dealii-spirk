@@ -1885,13 +1885,10 @@ namespace TimeIntegrationSchemes
           }
       }
 
-      for (unsigned int i = 0; i < n_stages; ++i)
-        std::cout << system_rhs.block(i).l2_norm() << std::endl;
-
       const OuterPreconditioner outer_preconditioner(n_stages,
                                                      n_max_iterations,
-                                                     this->time_step,
                                                      outer_tolerance,
+                                                     this->time_step,
                                                      T_inv_re,
                                                      T_inv_im,
                                                      T_re,
@@ -1913,17 +1910,15 @@ namespace TimeIntegrationSchemes
                    system_solution,
                    system_rhs,
                    outer_preconditioner);
-
-          std::cout << "<<< " << solver_control.last_step() << std::endl;
         }
-      else if (true)
+      else if (false)
         {
           ReductionControl solver_control(n_max_iterations, 1e-20, 1e-3);
 
           SystemMatrix2 system_matrix(n_stages,
                                       n_max_iterations,
-                                      this->time_step,
                                       outer_tolerance,
+                                      this->time_step,
                                       T_inv_re,
                                       T_inv_im,
                                       T_re,
@@ -1939,16 +1934,11 @@ namespace TimeIntegrationSchemes
                    system_solution,
                    system_rhs,
                    outer_preconditioner);
-
-          std::cout << "<<< " << solver_control.last_step() << std::endl;
         }
       else
         {
           outer_preconditioner.vmult(system_solution, system_rhs);
         }
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        std::cout << system_solution.block(i).l2_norm() << std::endl;
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
@@ -2084,7 +2074,21 @@ namespace TimeIntegrationSchemes
             op_complex.vmult(dst_block[i], src_block[i]);
           }
 
-        // apply T
+          // apply T
+#if DEBUG
+        dst = 0;
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
+            dst.block(i).add(T_im(i, j),
+                             dst_block[j].block(0),
+                             +T_re(i, j),
+                             dst_block[j].block(1));
+
+        for (unsigned int i = 0; i < n_stages; ++i)
+          Assert(dst.block(i).l2_norm() < 1e-8, ExcInternalError());
+#endif
+
+
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages; ++j)
