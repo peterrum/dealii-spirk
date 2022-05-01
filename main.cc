@@ -1883,7 +1883,7 @@ namespace TimeIntegrationSchemes
           }
       }
 
-      const OuterPreconditioner outer_preconditioner(n_stages,
+      const PreconditionComplex outer_preconditioner(n_stages,
                                                      n_max_iterations,
                                                      outer_tolerance,
                                                      inner_tolerance,
@@ -1923,10 +1923,10 @@ namespace TimeIntegrationSchemes
     }
 
   private:
-    class OuterPreconditioner
+    class PreconditionComplex
     {
     public:
-      OuterPreconditioner(
+      PreconditionComplex(
         const unsigned int                                 n_stages,
         const unsigned int                                 n_max_iterations,
         const double                                       outer_tolerance,
@@ -2007,12 +2007,12 @@ namespace TimeIntegrationSchemes
 
             op_complex.reinit(d_vec_re[i], d_vec_im[i], this->time_step);
 
-            Preconditioner presb(op,
-                                 *preconditioners[c],
-                                 inner_tolerance,
-                                 d_vec_re[i],
-                                 d_vec_im[i],
-                                 this->time_step);
+            PreconditionPRESB presb(op,
+                                    *preconditioners[c],
+                                    inner_tolerance,
+                                    d_vec_re[i],
+                                    d_vec_im[i],
+                                    this->time_step);
 
             solver.solve(op_complex, dst_block[c], src_block[c], presb);
 
@@ -2087,15 +2087,15 @@ namespace TimeIntegrationSchemes
         n_iterations;
     };
 
-    class Preconditioner
+    class PreconditionPRESB
     {
     public:
-      Preconditioner(const MassLaplaceOperator &           op,
-                     const PreconditionerBase<VectorType> &preconditioner,
-                     const double                          inner_tolerance,
-                     const double                          lambda_re,
-                     const double                          lambda_im,
-                     const double                          tau)
+      PreconditionPRESB(const MassLaplaceOperator &           op,
+                        const PreconditionerBase<VectorType> &preconditioner,
+                        const double                          inner_tolerance,
+                        const double                          lambda_re,
+                        const double                          lambda_im,
+                        const double                          tau)
         : op(op)
         , preconditioner(preconditioner)
         , inner_tolerance(inner_tolerance)
