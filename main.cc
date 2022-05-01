@@ -1886,6 +1886,7 @@ namespace TimeIntegrationSchemes
       const OuterPreconditioner outer_preconditioner(n_stages,
                                                      n_max_iterations,
                                                      outer_tolerance,
+                                                     inner_tolerance,
                                                      this->time_step,
                                                      T_inv_re,
                                                      T_inv_im,
@@ -1929,6 +1930,7 @@ namespace TimeIntegrationSchemes
         const unsigned int                                 n_stages,
         const unsigned int                                 n_max_iterations,
         const double                                       outer_tolerance,
+        const double                                       inner_tolerance,
         const double                                       time_step,
         const FullMatrix<typename VectorType::value_type> &T_inv_re,
         const FullMatrix<typename VectorType::value_type> &T_inv_im,
@@ -1943,6 +1945,7 @@ namespace TimeIntegrationSchemes
         : n_stages(n_stages)
         , n_max_iterations(n_max_iterations)
         , outer_tolerance(outer_tolerance)
+        , inner_tolerance(inner_tolerance)
         , time_step(time_step)
         , T_inv_re(T_inv_re)
         , T_inv_im(T_inv_im)
@@ -1997,7 +2000,8 @@ namespace TimeIntegrationSchemes
         // solve blocks
         for (unsigned int i = 0, c = 0; i < n_stages; ++c)
           {
-            ReductionControl solver_control(n_max_iterations, 1e-7, 1e-8);
+            SolverControl solver_control(n_max_iterations,
+                                         outer_tolerance * src.block(i).size());
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
@@ -2005,6 +2009,7 @@ namespace TimeIntegrationSchemes
 
             Preconditioner presb(op,
                                  *preconditioners[c],
+                                 inner_tolerance,
                                  d_vec_re[i],
                                  d_vec_im[i],
                                  this->time_step);
@@ -2062,6 +2067,7 @@ namespace TimeIntegrationSchemes
 
       const unsigned int n_max_iterations;
       const double       outer_tolerance;
+      const double       inner_tolerance;
       const double       time_step;
 
       const FullMatrix<typename VectorType::value_type> &T_inv_re;
@@ -2086,11 +2092,13 @@ namespace TimeIntegrationSchemes
     public:
       Preconditioner(const MassLaplaceOperator &           op,
                      const PreconditionerBase<VectorType> &preconditioner,
+                     const double                          inner_tolerance,
                      const double                          lambda_re,
                      const double                          lambda_im,
                      const double                          tau)
         : op(op)
         , preconditioner(preconditioner)
+        , inner_tolerance(inner_tolerance)
         , lambda_re(lambda_re)
         , lambda_im(lambda_im)
         , tau(tau)
@@ -2107,7 +2115,7 @@ namespace TimeIntegrationSchemes
         temp_0 = src.block(0);
         temp_0 += src.block(1);
 
-        if (false)
+        if (inner_tolerance == 0.0)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(0), temp_0);
@@ -2116,7 +2124,7 @@ namespace TimeIntegrationSchemes
           }
         else
           {
-            ReductionControl     reduction_control(100, 1e-20, 1e-4);
+            SolverControl        reduction_control(100, inner_tolerance);
             SolverCG<VectorType> solver(reduction_control);
 
             op.reinit(lambda_re + lambda_im, tau);
@@ -2130,7 +2138,7 @@ namespace TimeIntegrationSchemes
         temp_0 *= -1.0;
         temp_0 += src.block(1);
 
-        if (false)
+        if (inner_tolerance == 0.0)
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(1), temp_0);
@@ -2139,7 +2147,7 @@ namespace TimeIntegrationSchemes
           }
         else
           {
-            ReductionControl     reduction_control(100, 1e-20, 1e-4);
+            SolverControl        reduction_control(100, inner_tolerance);
             SolverCG<VectorType> solver(reduction_control);
 
             op.reinit(lambda_re + lambda_im, tau);
@@ -2162,6 +2170,8 @@ namespace TimeIntegrationSchemes
     private:
       const MassLaplaceOperator &           op;
       const PreconditionerBase<VectorType> &preconditioner;
+
+      const double inner_tolerance;
 
       const double lambda_re;
       const double lambda_im;
