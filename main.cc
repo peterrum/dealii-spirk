@@ -879,9 +879,6 @@ namespace TimeIntegrationSchemes
           }
       }
 
-      for (unsigned int i = 0; i < n_stages; ++i)
-        std::cout << system_rhs.block(i).l2_norm() << std::endl;
-
       this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
                           std::chrono::system_clock::now() - time_rhs)
                           .count();
@@ -947,9 +944,6 @@ namespace TimeIntegrationSchemes
       pcout << " inner CG iterations." << std::endl;
 
       const auto time_solution_update = std::chrono::system_clock::now();
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        std::cout << system_solution.block(i).l2_norm() << std::endl;
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
