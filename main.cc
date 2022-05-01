@@ -1899,6 +1899,19 @@ namespace TimeIntegrationSchemes
 
       outer_preconditioner.vmult(system_solution, system_rhs);
 
+      const auto n_iterations =
+        outer_preconditioner.get_n_iterations_and_clear();
+
+      pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+            << std::get<1>(n_iterations[0]) << "+"
+            << std::get<2>(n_iterations[0]) << ")";
+      for (unsigned int i = 1; i < n_iterations.size(); ++i)
+        pcout << ", " << std::get<0>(n_iterations[0]) << " ("
+              << std::get<1>(n_iterations[0]) << "+"
+              << std::get<2>(n_iterations[0]) << ")";
+      pcout << std::endl;
+
+
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
         solution.add(time_step * b_vec[i], system_solution.block(i));
@@ -1940,7 +1953,11 @@ namespace TimeIntegrationSchemes
         , op(op)
         , op_complex(op_complex)
         , preconditioners(preconditioners)
-      {}
+      {
+        this->n_iterations.assign(
+          (n_stages + 1) / 2,
+          std::tuple<unsigned int, unsigned int, unsigned int>{0, 0, 0});
+      }
 
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
@@ -1994,6 +2011,12 @@ namespace TimeIntegrationSchemes
 
             solver.solve(op_complex, dst_block[c], src_block[c], presb);
 
+            const auto n_iterations_presb = presb.get_n_iterations_and_clear();
+
+            std::get<0>(this->n_iterations[c]) += solver_control.last_step();
+            std::get<1>(this->n_iterations[c]) += n_iterations_presb.first;
+            std::get<2>(this->n_iterations[c]) += n_iterations_presb.second;
+
             if (d_vec_im[i] == 0)
               i += 1;
             else
@@ -2024,6 +2047,16 @@ namespace TimeIntegrationSchemes
             }
       }
 
+      std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>
+      get_n_iterations_and_clear() const
+      {
+        const auto temp = this->n_iterations;
+        this->n_iterations.assign(
+          (n_stages + 1) / 2,
+          std::tuple<unsigned int, unsigned int, unsigned int>{0, 0, 0});
+        return temp;
+      }
+
     private:
       const unsigned int n_stages;
 
@@ -2043,6 +2076,9 @@ namespace TimeIntegrationSchemes
 
       std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
         &preconditioners;
+
+      mutable std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>
+        n_iterations;
     };
 
     class Preconditioner
@@ -2058,6 +2094,7 @@ namespace TimeIntegrationSchemes
         , lambda_re(lambda_re)
         , lambda_im(lambda_im)
         , tau(tau)
+        , n_iterations(0, 0)
       {}
 
       void
@@ -2074,6 +2111,8 @@ namespace TimeIntegrationSchemes
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(0), temp_0);
+
+            n_iterations.first += 1;
           }
         else
           {
@@ -2082,6 +2121,8 @@ namespace TimeIntegrationSchemes
 
             op.reinit(lambda_re + lambda_im, tau);
             solver.solve(op, dst.block(0), temp_0, preconditioner);
+
+            n_iterations.first += reduction_control.last_step();
           }
 
         op.reinit(lambda_im, 0.0);
@@ -2093,6 +2134,8 @@ namespace TimeIntegrationSchemes
           {
             op.reinit(lambda_re + lambda_im, tau);
             preconditioner.vmult(dst.block(1), temp_0);
+
+            n_iterations.second += 1;
           }
         else
           {
@@ -2101,9 +2144,19 @@ namespace TimeIntegrationSchemes
 
             op.reinit(lambda_re + lambda_im, tau);
             solver.solve(op, dst.block(1), temp_0, preconditioner);
+
+            n_iterations.second += reduction_control.last_step();
           }
 
         dst.block(0) -= dst.block(1);
+      }
+
+      std::pair<unsigned int, unsigned int>
+      get_n_iterations_and_clear() const
+      {
+        const auto temp    = this->n_iterations;
+        this->n_iterations = {0, 0};
+        return temp;
       }
 
     private:
@@ -2113,6 +2166,8 @@ namespace TimeIntegrationSchemes
       const double lambda_re;
       const double lambda_im;
       const double tau;
+
+      mutable std::pair<unsigned int, unsigned int> n_iterations;
     };
 
     const unsigned int n_max_iterations;
