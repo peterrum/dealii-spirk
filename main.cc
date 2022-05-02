@@ -2435,6 +2435,10 @@ namespace HeatEquation
           else
             AssertThrow(false, ExcNotImplemented());
 
+          if (false)
+            complex_mass_laplace_operator->set_scalar_operator(
+              *mass_laplace_operator);
+
           time_integration_scheme =
             std::make_unique<TimeIntegrationSchemes::ComplexIRK>(
               comm_global,
