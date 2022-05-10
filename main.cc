@@ -2235,25 +2235,30 @@ namespace TimeIntegrationSchemes
             }
         }
 
-      BlockVectorType system_rhs(n_stages);      // TODO
-      BlockVectorType system_solution(n_stages); //
-      VectorType      tmp;                       //
+      std::vector<BlockVectorType> system_rhs(n_stages_reduced);      // TODO
+      std::vector<BlockVectorType> system_solution(n_stages_reduced); //
+      VectorType                   tmp;                               //
 
-      for (unsigned int i = 0; i < n_stages; ++i)
+      for (unsigned int i = 0; i < n_stages_reduced; ++i)
         {
-          system_rhs.block(i).reinit(solution);
-          system_solution.block(i).reinit(solution);
+          system_rhs[i].reinit(2);
+          system_rhs[i].block(0).reinit(solution);
+          system_rhs[i].block(1).reinit(solution);
+
+          system_solution[i].reinit(2);
+          system_solution[i].block(0).reinit(solution);
+          system_solution[i].block(1).reinit(solution);
         }
       tmp.reinit(solution);
 
       for (unsigned int i = 0; i < n_stages; ++i)
         evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
-                              system_rhs.block(i));
+                              system_rhs[i / 2].block(i % 2));
 
       op.vmult(tmp, solution, 0.0, -1.0);
 
       for (unsigned int i = 0; i < n_stages; ++i)
-        system_rhs.block(i).add(1.0, tmp);
+        system_rhs[i / 2].block(i % 2).add(1.0, tmp);
 
       {
         std::vector<typename VectorType::value_type> values(n_stages);
@@ -2261,13 +2266,13 @@ namespace TimeIntegrationSchemes
         for (const auto e : solution.locally_owned_elements())
           {
             for (unsigned int j = 0; j < n_stages; ++j)
-              values[j] = system_rhs.block(j)[e];
+              values[j] = system_rhs[j / 2].block(j % 2)[e];
 
             for (unsigned int i = 0; i < n_stages; ++i)
               {
-                system_rhs.block(i)[e] = 0.0;
+                system_rhs[i / 2].block(i % 2)[e] = 0.0;
                 for (unsigned int j = 0; j < n_stages; ++j)
-                  system_rhs.block(i)[e] += A_inv[i][j] * values[j];
+                  system_rhs[i / 2].block(i % 2)[e] += A_inv[i][j] * values[j];
               }
           }
       }
@@ -2304,7 +2309,7 @@ namespace TimeIntegrationSchemes
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
-        solution.add(time_step * b_vec[i], system_solution.block(i));
+        solution.add(time_step * b_vec[i], system_solution[i / 2].block(i % 2));
 
       if (timestep_number == 1)
         clear_timers(); // clear timers since preconditioner is setup in
@@ -2352,7 +2357,8 @@ namespace TimeIntegrationSchemes
       }
 
       void
-      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      vmult(std::vector<BlockVectorType> &      dst,
+            const std::vector<BlockVectorType> &src) const
       {
         const unsigned int n_stages_reduced = (n_stages + 1) / 2;
 
@@ -2366,8 +2372,8 @@ namespace TimeIntegrationSchemes
 
             for (unsigned int j = 0; j < 2; ++j)
               {
-                src_block[i].block(j).reinit(src.block(0));
-                dst_block[i].block(j).reinit(src.block(0));
+                src_block[i].block(j).reinit(src[0].block(0));
+                dst_block[i].block(j).reinit(src[0].block(0));
               }
           }
 
@@ -2375,8 +2381,10 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           for (unsigned int j = 0; j < n_stages; ++j)
             {
-              src_block[i].block(0).add(T_inv_re(i * 2, j), src.block(j));
-              src_block[i].block(1).add(T_inv_im(i * 2, j), src.block(j));
+              src_block[i].block(0).add(T_inv_re(i * 2, j),
+                                        src[j / 2].block(j % 2));
+              src_block[i].block(1).add(T_inv_im(i * 2, j),
+                                        src[j / 2].block(j % 2));
             }
 
         // solve blocks
@@ -2384,7 +2392,7 @@ namespace TimeIntegrationSchemes
           {
             SolverControl solver_control(n_max_iterations,
                                          outer_tolerance *
-                                           src.block(i * 2).size());
+                                           src[i].block(0).size());
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
@@ -2409,15 +2417,17 @@ namespace TimeIntegrationSchemes
           }
 
         // apply T
-        dst = 0;
+        for (auto &i : dst)
+          i = 0;
+
         for (unsigned int i = 0; i < n_stages; ++i)
           for (unsigned int j = 0; j < n_stages_reduced; ++j) // sp
             {
               const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
-              dst.block(i).add(scaling * T_re(i, j * 2),
-                               dst_block[j].block(0),
-                               -scaling * T_im(i, j * 2),
-                               dst_block[j].block(1));
+              dst[i / 2].block(i % 2).add(scaling * T_re(i, j * 2),
+                                          dst_block[j].block(0),
+                                          -scaling * T_im(i, j * 2),
+                                          dst_block[j].block(1));
             }
       }
 
