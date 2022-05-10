@@ -1970,7 +1970,7 @@ namespace TimeIntegrationSchemes
         std::vector<BlockVectorType> src_block(n_stages_reduced);
         std::vector<BlockVectorType> dst_block(n_stages_reduced);
 
-        for (unsigned int i = 0; i < n_stages_reduced; ++i)
+        for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           {
             src_block[i].reinit(2);
             dst_block[i].reinit(2);
@@ -1983,7 +1983,7 @@ namespace TimeIntegrationSchemes
           }
 
         // apply Tinv
-        for (unsigned int i = 0; i < n_stages_reduced; ++i)
+        for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           for (unsigned int j = 0; j < n_stages; ++j)
             {
               src_block[i].block(0).add(T_inv_re(i * 2, j), src.block(j));
@@ -1991,7 +1991,7 @@ namespace TimeIntegrationSchemes
             }
 
         // solve blocks
-        for (unsigned int i = 0; i < n_stages_reduced; ++i)
+        for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           {
             SolverControl solver_control(n_max_iterations,
                                          outer_tolerance *
@@ -2022,7 +2022,7 @@ namespace TimeIntegrationSchemes
         // apply T
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0; j < n_stages_reduced; ++j)
+          for (unsigned int j = 0; j < n_stages_reduced; ++j) // sp
             {
               const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
               dst.block(i).add(scaling * T_re(i, j * 2),
