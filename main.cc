@@ -2262,17 +2262,11 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2); ++i)
           system_solution[i / 2].block(i % 2).add(1.0, tmp);
 
-      {
-        for (const auto e : solution.locally_owned_elements())
-          {
-            for (unsigned int i = 0; i < n_stages; ++i)
-              {
-                for (unsigned int j = 0; j < n_stages; ++j)
-                  system_rhs[i / 2].block(i % 2)[e] +=
-                    A_inv[i][j] * system_solution[j / 2].block(j % 2)[e];
-              }
-          }
-      }
+      for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned int j = 0; j < n_stages; ++j)
+          for (const auto e : solution.locally_owned_elements())
+            system_rhs[i / 2].block(i % 2)[e] +=
+              A_inv[i][j] * system_solution[j / 2].block(j % 2)[e];
 
       for (auto &i : system_solution)
         i = 0.0;
