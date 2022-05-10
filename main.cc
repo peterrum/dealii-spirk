@@ -1828,21 +1828,18 @@ namespace TimeIntegrationSchemes
 
       this->time_step = time_step;
 
+      const unsigned int n_stages_reduced = (n_stages + 1) / 2;
+
       if (preconditioners.size() == 0)
         {
-          preconditioners.resize((n_stages + 1) / 2);
+          preconditioners.resize(n_stages_reduced);
 
-          for (unsigned int i = 0, c = 0; i < n_stages; ++c)
+          for (unsigned int i = 0; i < n_stages_reduced; ++i)
             {
-              op.reinit(d_vec_re[i] + d_vec_im[i], time_step);
+              op.reinit(d_vec_re[i * 2] + d_vec_im[i * 2], time_step);
 
-              preconditioners[c] = this->block_preconditioner.clone();
-              preconditioners[c]->reinit();
-
-              if (d_vec_im[i] == 0)
-                i += 1;
-              else
-                i += 2;
+              preconditioners[i] = this->block_preconditioner.clone();
+              preconditioners[i]->reinit();
             }
         }
 
