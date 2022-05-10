@@ -1983,72 +1983,52 @@ namespace TimeIntegrationSchemes
           }
 
         // apply Tinv
-        for (unsigned int i = 0, c = 0; i < n_stages; ++c)
-          {
-            for (unsigned int j = 0; j < n_stages; ++j)
-              {
-                src_block[c].block(0).add(T_inv_re(i, j), src.block(j));
-                src_block[c].block(1).add(T_inv_im(i, j), src.block(j));
-              }
-
-            if (d_vec_im[i] == 0)
-              i += 1;
-            else
-              i += 2;
-          }
+        for (unsigned int i = 0; i < n_stages_reduced; ++i)
+          for (unsigned int j = 0; j < n_stages; ++j)
+            {
+              src_block[i].block(0).add(T_inv_re(i * 2, j), src.block(j));
+              src_block[i].block(1).add(T_inv_im(i * 2, j), src.block(j));
+            }
 
         // solve blocks
-        for (unsigned int i = 0, c = 0; i < n_stages; ++c)
+        for (unsigned int i = 0; i < n_stages_reduced; ++i)
           {
             SolverControl solver_control(n_max_iterations,
-                                         outer_tolerance * src.block(i).size());
+                                         outer_tolerance *
+                                           src.block(i * 2).size());
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
-            op_complex.reinit(d_vec_re[i], d_vec_im[i], this->time_step);
+            op_complex.reinit(d_vec_re[i * 2],
+                              d_vec_im[i * 2],
+                              this->time_step);
 
             PreconditionPRESB presb(op,
-                                    *preconditioners[c],
+                                    *preconditioners[i],
                                     inner_tolerance,
-                                    d_vec_re[i],
-                                    d_vec_im[i],
+                                    d_vec_re[i * 2],
+                                    d_vec_im[i * 2],
                                     this->time_step);
 
-            solver.solve(op_complex, dst_block[c], src_block[c], presb);
+            solver.solve(op_complex, dst_block[i], src_block[i], presb);
 
             const auto n_iterations_presb = presb.get_n_iterations_and_clear();
 
-            std::get<0>(this->n_iterations[c]) += solver_control.last_step();
-            std::get<1>(this->n_iterations[c]) += n_iterations_presb.first;
-            std::get<2>(this->n_iterations[c]) += n_iterations_presb.second;
-
-            if (d_vec_im[i] == 0)
-              i += 1;
-            else
-              i += 2;
+            std::get<0>(this->n_iterations[i]) += solver_control.last_step();
+            std::get<1>(this->n_iterations[i]) += n_iterations_presb.first;
+            std::get<2>(this->n_iterations[i]) += n_iterations_presb.second;
           }
 
         // apply T
         dst = 0;
         for (unsigned int i = 0; i < n_stages; ++i)
-          for (unsigned int j = 0, c = 0; j < n_stages; ++c)
+          for (unsigned int j = 0; j < n_stages_reduced; ++j)
             {
-              if (d_vec_im[j] == 0)
-                {
-                  dst.block(i).add(T_re(i, j),
-                                   dst_block[c].block(0),
-                                   -T_im(i, j),
-                                   dst_block[c].block(1));
-                  j += 1;
-                }
-              else
-                {
-                  dst.block(i).add(2 * T_re(i, j),
-                                   dst_block[c].block(0),
-                                   -2 * T_im(i, j),
-                                   dst_block[c].block(1));
-                  j += 2;
-                }
+              const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
+              dst.block(i).add(scaling * T_re(i, j * 2),
+                               dst_block[j].block(0),
+                               -scaling * T_im(i, j * 2),
+                               dst_block[j].block(1));
             }
       }
 
