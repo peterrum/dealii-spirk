@@ -574,7 +574,7 @@ private:
 
   MatrixFree<dim, Number> matrix_free;
 
-  const MassLaplaceOperator *scalar_operator;
+  const MassLaplaceOperator *scalar_operator = nullptr;
 
   mutable SparseMatrixType system_matrix;
 };
