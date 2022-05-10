@@ -2308,8 +2308,10 @@ namespace TimeIntegrationSchemes
 
 
       // accumulate result in solution
-      for (unsigned int i = 0; i < n_stages; ++i)
-        solution.add(time_step * b_vec[i], system_solution[i / 2].block(i % 2));
+      for (unsigned int ii = 0; ii < n_stages_reduced; ++ii)
+        for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2); ++i)
+          solution.add(time_step * b_vec[i],
+                       system_solution[i / 2].block(i % 2));
 
       if (timestep_number == 1)
         clear_timers(); // clear timers since preconditioner is setup in
