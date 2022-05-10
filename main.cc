@@ -2251,14 +2251,16 @@ namespace TimeIntegrationSchemes
         }
       tmp.reinit(solution);
 
-      for (unsigned int i = 0; i < n_stages; ++i)
-        evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
-                              system_rhs[i / 2].block(i % 2));
+      for (unsigned int ii = 0; ii < n_stages_reduced; ++ii)
+        for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2); ++i)
+          evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
+                                system_rhs[i / 2].block(i % 2));
 
       op.vmult(tmp, solution, 0.0, -1.0);
 
-      for (unsigned int i = 0; i < n_stages; ++i)
-        system_rhs[i / 2].block(i % 2).add(1.0, tmp);
+      for (unsigned int ii = 0; ii < n_stages_reduced; ++ii)
+        for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2); ++i)
+          system_rhs[i / 2].block(i % 2).add(1.0, tmp);
 
       {
         std::vector<typename VectorType::value_type> values(n_stages);
@@ -2381,13 +2383,15 @@ namespace TimeIntegrationSchemes
 
         // apply Tinv
         for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
-          for (unsigned int j = 0; j < n_stages; ++j)
-            {
-              src_block[i].block(0).add(T_inv_re(i * 2, j),
-                                        src[j / 2].block(j % 2));
-              src_block[i].block(1).add(T_inv_im(i * 2, j),
-                                        src[j / 2].block(j % 2));
-            }
+          for (unsigned int jj = 0; jj < n_stages_reduced; ++jj)
+            for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
+                 ++j)
+              {
+                src_block[i].block(0).add(T_inv_re(i * 2, j),
+                                          src[j / 2].block(j % 2));
+                src_block[i].block(1).add(T_inv_im(i * 2, j),
+                                          src[j / 2].block(j % 2));
+              }
 
         // solve blocks
         for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
@@ -2422,15 +2426,17 @@ namespace TimeIntegrationSchemes
         for (auto &i : dst)
           i = 0;
 
-        for (unsigned int i = 0; i < n_stages; ++i)
+        for (unsigned int ii = 0; ii < n_stages_reduced; ++ii)
           for (unsigned int j = 0; j < n_stages_reduced; ++j) // sp
-            {
-              const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
-              dst[i / 2].block(i % 2).add(scaling * T_re(i, j * 2),
-                                          dst_block[j].block(0),
-                                          -scaling * T_im(i, j * 2),
-                                          dst_block[j].block(1));
-            }
+            for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2);
+                 ++i)
+              {
+                const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
+                dst[i / 2].block(i % 2).add(scaling * T_re(i, j * 2),
+                                            dst_block[j].block(0),
+                                            -scaling * T_im(i, j * 2),
+                                            dst_block[j].block(1));
+              }
       }
 
       std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>
