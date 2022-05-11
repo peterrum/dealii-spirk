@@ -2222,8 +2222,6 @@ namespace TimeIntegrationSchemes
 
       this->time_step = time_step;
 
-      const unsigned int n_stages_reduced = (n_stages + 1) / 2;
-
       const unsigned int my_block = Utilities::MPI::this_mpi_process(comm_row);
 
       if (preconditioners == nullptr)
@@ -2237,40 +2235,40 @@ namespace TimeIntegrationSchemes
       BlockVectorType system_rhs(2);      // TODO
       BlockVectorType system_solution(2); //
 
-      {
-        VectorType tmp;
-        tmp.reinit(solution);
+      VectorType tmp;
+      tmp.reinit(solution);
 
-        system_rhs.reinit(2);
-        system_rhs.block(0).reinit(solution);
-        system_rhs.block(1).reinit(solution);
+      system_rhs.reinit(2);
+      system_rhs.block(0).reinit(solution);
+      system_rhs.block(1).reinit(solution);
 
-        system_solution.reinit(2);
-        system_solution.block(0).reinit(solution);
-        system_solution.block(1).reinit(solution);
+      system_solution.reinit(2);
+      system_solution.block(0).reinit(solution);
+      system_solution.block(1).reinit(solution);
 
-        for (unsigned int i = my_block * 2;
-             i < std::min(n_stages, (my_block + 1) * 2);
-             ++i)
-          evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
-                                system_solution.block(i % 2));
+      for (unsigned int i = my_block * 2;
+           i < std::min(n_stages, (my_block + 1) * 2);
+           ++i)
+        evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
+                              system_solution.block(i % 2));
 
-        op.vmult(tmp, solution, 0.0, -1.0);
+      op.vmult(tmp, solution, 0.0, -1.0);
 
-        for (unsigned int i = my_block * 2;
-             i < std::min(n_stages, (my_block + 1) * 2);
-             ++i)
-          system_solution.block(i % 2).add(1.0, tmp);
-      }
+      for (unsigned int i = my_block * 2;
+           i < std::min(n_stages, (my_block + 1) * 2);
+           ++i)
+        system_solution.block(i % 2).add(1.0, tmp);
 
-      for (unsigned int jj = 0; jj < n_stages_reduced; ++jj) // sp
-        for (unsigned int i = my_block * 2;
-             i < std::min(n_stages, (my_block + 1) * 2);
-             ++i)
-          for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
-               ++j)
-            system_rhs.block(i % 2).add(A_inv[i][j],
-                                        system_solution.block(j % 2));
+      // for (unsigned int jj = 0; jj < n_stages_reduced; ++jj) // sp
+      //  for (unsigned int i = my_block * 2;
+      //       i < std::min(n_stages, (my_block + 1) * 2);
+      //       ++i)
+      //    for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
+      //         ++j)
+      //      system_rhs.block(i % 2).add(A_inv[i][j],
+      //                                  system_solution.block(j % 2));
+
+      perform_basis_change(system_rhs, system_solution, comm_row, A_inv, false);
 
       for (auto &i : system_solution)
         i = 0.0;
@@ -2323,6 +2321,74 @@ namespace TimeIntegrationSchemes
     }
 
   private:
+    static void
+    matrix_vector_rol_operation(BlockVectorType &      dst,
+                                const BlockVectorType &src,
+                                const MPI_Comm         comm,
+                                std::function<void(unsigned int,
+                                                   unsigned int,
+                                                   BlockVectorType &,
+                                                   const BlockVectorType &)> fu)
+    {
+      const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
+      const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
+
+      GrowingVectorMemory<BlockVectorType>            memory;
+      typename VectorMemory<BlockVectorType>::Pointer temp_pointer(memory);
+
+      BlockVectorType &temp = *temp_pointer;
+      temp.reinit(src.n_blocks());
+
+      for (unsigned int b = 0; b < src.n_blocks(); ++b)
+        {
+          temp.block(b).reinit(src.block(b), true);
+          temp.block(b).copy_locally_owned_data_from(src.block(b));
+        }
+
+      for (unsigned int k = 0; k < nproc; ++k)
+        {
+          if (k != 0)
+            {
+              for (unsigned int b = 0; b < src.n_blocks(); ++b)
+                {
+                  const auto ierr =
+                    MPI_Sendrecv_replace(temp.block(b).get_values(),
+                                         temp.block(b).locally_owned_size(),
+                                         MPI_DOUBLE,
+                                         (rank + nproc - 1) % nproc,
+                                         k,
+                                         (rank + nproc + 1) % nproc,
+                                         k,
+                                         comm,
+                                         MPI_STATUS_IGNORE);
+
+                  AssertThrowMPI(ierr);
+                }
+            }
+
+          fu(rank, (k + rank) % nproc, dst, temp);
+        }
+    }
+
+    static void
+    perform_basis_change(BlockVectorType &                                 dst,
+                         const BlockVectorType &                           src,
+                         const MPI_Comm                                    comm,
+                         const FullMatrix<typename VectorType::value_type> T,
+                         const bool                                        add)
+    {
+      const auto fu =
+        [&T, add](const auto i, const auto j, auto &dst, const auto &src) {
+          AssertThrow(false, ExcNotImplemented());
+          if ((add == false) && (i == j))
+            dst.equ(T[i][j], src);
+          else
+            dst.add(T[i][j], src);
+        };
+
+      matrix_vector_rol_operation(dst, src, comm, fu);
+    }
+
     class PreconditionComplex
     {
     public:
