@@ -3205,7 +3205,11 @@ main(int argc, char **argv)
             }
 
           const unsigned int size_x =
-            params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
+            params.time_integration_scheme == "spirk" ?
+              params.irk_stages :
+              (params.time_integration_scheme == "complex-spirk" ?
+                 (params.irk_stages + 1) / 2 :
+                 1);
 
           AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(comm),
                       ExcMessage("Not enough ranks have been provided!"));
