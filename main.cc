@@ -2259,18 +2259,6 @@ namespace TimeIntegrationSchemes
            ++i)
         system_solution.block(i % 2).add(1.0, tmp);
 
-      // for (unsigned int jj = 0; jj < n_stages_reduced; ++jj) // sp
-      //  for (unsigned int i = my_block * 2;
-      //       i < std::min(n_stages, (my_block + 1) * 2);
-      //       ++i)
-      //    for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
-      //         ++j)
-      //      system_rhs.block(i % 2).add(A_inv[i][j],
-      //                                  system_solution.block(j % 2));
-      //
-      // perform_basis_change(system_rhs, system_solution, comm_row, A_inv,
-      // false);
-
       matrix_vector_rol_operation(
         system_rhs,
         system_solution,
@@ -2327,6 +2315,13 @@ namespace TimeIntegrationSchemes
           solution.add(time_step * b_vec[i], system_solution.block(i % 2));
         else
           solution.equ(time_step * b_vec[i], system_solution.block(i % 2));
+
+      MPI_Allreduce(MPI_IN_PLACE,
+                    solution.get_values(),
+                    solution.locally_owned_size(),
+                    MPI_DOUBLE,
+                    MPI_SUM,
+                    comm_row);
 
       if (timestep_number == 1)
         clear_timers(); // clear timers since preconditioner is setup in
