@@ -2368,9 +2368,9 @@ namespace TimeIntegrationSchemes
                                          temp.block(b).locally_owned_size(),
                                          MPI_DOUBLE,
                                          (rank + nproc - 1) % nproc,
-                                         k,
+                                         k + nproc * b,
                                          (rank + nproc + 1) % nproc,
-                                         k,
+                                         k + nproc * b,
                                          comm,
                                          MPI_STATUS_IGNORE);
 
