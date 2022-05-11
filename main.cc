@@ -2267,8 +2267,21 @@ namespace TimeIntegrationSchemes
       //         ++j)
       //      system_rhs.block(i % 2).add(A_inv[i][j],
       //                                  system_solution.block(j % 2));
+      //
+      // perform_basis_change(system_rhs, system_solution, comm_row, A_inv,
+      // false);
 
-      perform_basis_change(system_rhs, system_solution, comm_row, A_inv, false);
+      matrix_vector_rol_operation(
+        system_rhs,
+        system_solution,
+        comm_row,
+        [&](const auto ii, const auto jj, auto &dst, const auto &src) {
+          for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2);
+               ++i)
+            for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
+                 ++j)
+              dst.block(i % 2).add(A_inv[i][j], src.block(j % 2));
+        });
 
       for (auto &i : system_solution)
         i = 0.0;
@@ -2370,25 +2383,6 @@ namespace TimeIntegrationSchemes
         }
     }
 
-    static void
-    perform_basis_change(BlockVectorType &                                 dst,
-                         const BlockVectorType &                           src,
-                         const MPI_Comm                                    comm,
-                         const FullMatrix<typename VectorType::value_type> T,
-                         const bool                                        add)
-    {
-      const auto fu =
-        [&T, add](const auto i, const auto j, auto &dst, const auto &src) {
-          AssertThrow(false, ExcNotImplemented());
-          if ((add == false) && (i == j))
-            dst.equ(T[i][j], src);
-          else
-            dst.add(T[i][j], src);
-        };
-
-      matrix_vector_rol_operation(dst, src, comm, fu);
-    }
-
     class PreconditionComplex
     {
     public:
@@ -2431,7 +2425,6 @@ namespace TimeIntegrationSchemes
       void
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
-        const unsigned int n_stages_reduced = (n_stages + 1) / 2;
         const unsigned int my_block =
           Utilities::MPI::this_mpi_process(comm_row);
 
@@ -2445,14 +2438,18 @@ namespace TimeIntegrationSchemes
           }
 
         // apply Tinv
-        for (unsigned int i = 0; i < n_stages_reduced; ++i)      // sp: CA
-          for (unsigned int jj = 0; jj < n_stages_reduced; ++jj) // sp
+        matrix_vector_rol_operation(
+          src_block,
+          src,
+          comm_row,
+          [&](const auto ii, const auto jj, auto &dst, const auto &src) {
             for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
                  ++j)
               {
-                src_block.block(0).add(T_inv_re(i * 2, j), src.block(j % 2));
-                src_block.block(1).add(T_inv_im(i * 2, j), src.block(j % 2));
+                dst.block(0).add(T_inv_re(ii * 2, j), src.block(j % 2));
+                dst.block(1).add(T_inv_im(ii * 2, j), src.block(j % 2));
               }
+          });
 
         // solve blocks
         {
@@ -2482,20 +2479,23 @@ namespace TimeIntegrationSchemes
         }
 
         // apply T
-        for (auto &i : dst)
-          i = 0;
+        dst = 0;
 
-        for (unsigned int ii = 0; ii < n_stages_reduced; ++ii) // sp: CA
-          for (unsigned int j = 0; j < n_stages_reduced; ++j)  // sp
+        matrix_vector_rol_operation(
+          src_block,
+          src,
+          comm_row,
+          [&](const auto ii, const auto jj, auto &dst, const auto &src) {
             for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2);
                  ++i)
               {
-                const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
-                dst.block(i % 2).add(scaling * T_re(i, j * 2),
-                                     dst_block.block(0),
-                                     -scaling * T_im(i, j * 2),
-                                     dst_block.block(1));
+                const double scaling = (jj < (n_stages / 2)) ? 2.0 : 1.0;
+                dst.block(i % 2).add(scaling * T_re(i, jj * 2),
+                                     src.block(0),
+                                     -scaling * T_im(i, jj * 2),
+                                     src.block(1));
               }
+          });
       }
 
       std::tuple<unsigned int, unsigned int, unsigned int>
