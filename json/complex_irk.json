@@ -2,7 +2,7 @@
     "FEDegree" : 1,
     "NRefinements" : 7,
     "TimeIntegrationScheme" : "complex_irk", 
-    "IRKStages" : "9",
+    "IRKStages" : "5",
     "TimeStepSize" : "0.1",
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
