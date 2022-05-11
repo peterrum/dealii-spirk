@@ -2315,7 +2315,7 @@ namespace TimeIntegrationSchemes
       for (unsigned int i = my_block * 2;
            i < std::min(n_stages, (my_block + 1) * 2);
            ++i)
-        if ((i == 0) || (i % 2 == 0))
+        if ((i == 0) || (i % 2 == 1))
           solution.add(time_step * b_vec[i], system_solution.block(i % 2));
         else
           solution.equ(time_step * b_vec[i], system_solution.block(i % 2));
@@ -2481,8 +2481,8 @@ namespace TimeIntegrationSchemes
         dst = 0;
 
         matrix_vector_rol_operation(
-          src_block,
-          src,
+          dst,
+          dst_block,
           comm_row,
           [&](const auto ii, const auto jj, auto &dst, const auto &src) {
             for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2);
