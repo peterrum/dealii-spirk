@@ -2178,6 +2178,7 @@ namespace TimeIntegrationSchemes
   {
   public:
     ComplexSPIRK(const MPI_Comm                        comm,
+                 const MPI_Comm                        comm_row,
                  const double                          outer_tolerance,
                  const double                          inner_tolerance,
                  const unsigned int                    n_stages,
@@ -2191,6 +2192,7 @@ namespace TimeIntegrationSchemes
                        op,
                        block_preconditioner,
                        evaluate_rhs_function)
+      , comm_row(comm_row)
       , n_max_iterations(1000)
       , outer_tolerance(outer_tolerance)
       , inner_tolerance(inner_tolerance)
@@ -2222,7 +2224,7 @@ namespace TimeIntegrationSchemes
 
       const unsigned int n_stages_reduced = (n_stages + 1) / 2;
 
-      const unsigned int my_block = 0;
+      const unsigned int my_block = Utilities::MPI::this_mpi_process(comm_row);
 
       if (preconditioners == nullptr)
         {
@@ -2273,7 +2275,8 @@ namespace TimeIntegrationSchemes
       for (auto &i : system_solution)
         i = 0.0;
 
-      const PreconditionComplex outer_preconditioner(n_stages,
+      const PreconditionComplex outer_preconditioner(comm_row,
+                                                     n_stages,
                                                      n_max_iterations,
                                                      outer_tolerance,
                                                      inner_tolerance,
@@ -2324,6 +2327,7 @@ namespace TimeIntegrationSchemes
     {
     public:
       PreconditionComplex(
+        const MPI_Comm                                         comm_row,
         const unsigned int                                     n_stages,
         const unsigned int                                     n_max_iterations,
         const double                                           outer_tolerance,
@@ -2338,7 +2342,8 @@ namespace TimeIntegrationSchemes
         const MassLaplaceOperator &                            op,
         const ComplexMassLaplaceOperator &                     op_complex,
         std::unique_ptr<const PreconditionerBase<VectorType>> &preconditioners)
-        : n_stages(n_stages)
+        : comm_row(comm_row)
+        , n_stages(n_stages)
         , n_max_iterations(n_max_iterations)
         , outer_tolerance(outer_tolerance)
         , inner_tolerance(inner_tolerance)
@@ -2361,7 +2366,8 @@ namespace TimeIntegrationSchemes
       vmult(BlockVectorType &dst, const BlockVectorType &src) const
       {
         const unsigned int n_stages_reduced = (n_stages + 1) / 2;
-        const unsigned int my_block         = 0;
+        const unsigned int my_block =
+          Utilities::MPI::this_mpi_process(comm_row);
 
         BlockVectorType src_block(2);
         BlockVectorType dst_block(2);
@@ -2436,6 +2442,8 @@ namespace TimeIntegrationSchemes
       }
 
     private:
+      const MPI_Comm comm_row;
+
       const unsigned int n_stages;
 
       const unsigned int n_max_iterations;
@@ -2550,6 +2558,8 @@ namespace TimeIntegrationSchemes
 
       mutable std::pair<unsigned int, unsigned int> n_iterations;
     };
+
+    const MPI_Comm comm_row;
 
     const unsigned int n_max_iterations;
     const double       outer_tolerance;
@@ -2839,6 +2849,7 @@ namespace HeatEquation
           time_integration_scheme =
             std::make_unique<TimeIntegrationSchemes::ComplexSPIRK>(
               comm_global,
+              comm_row,
               params.outer_tolerance,
               params.inner_tolerance,
               params.irk_stages,
