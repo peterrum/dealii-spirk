@@ -2296,9 +2296,8 @@ namespace TimeIntegrationSchemes
 
       outer_preconditioner.vmult(system_solution, system_rhs);
 
-      /*
-      const auto n_iterations =
-        outer_preconditioner.get_n_iterations_and_clear();
+      const auto n_iterations = Utilities::MPI::all_gather(
+        comm_row, outer_preconditioner.get_n_iterations_and_clear());
 
       pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
             << std::get<1>(n_iterations[0]) << "+"
@@ -2308,7 +2307,6 @@ namespace TimeIntegrationSchemes
               << std::get<1>(n_iterations[0]) << "+"
               << std::get<2>(n_iterations[0]) << ")";
       pcout << std::endl;
-       */
 
 
       // accumulate result in solution
