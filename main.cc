@@ -2197,7 +2197,11 @@ namespace TimeIntegrationSchemes
       , outer_tolerance(outer_tolerance)
       , inner_tolerance(inner_tolerance)
       , op_complex(op_complex)
-    {}
+    {
+      AssertThrow((n_stages + 1) / 2 ==
+                    Utilities::MPI::n_mpi_processes(comm_row),
+                  ExcInternalError());
+    }
 
     virtual void
     get_statistics(ConvergenceTable &table,
@@ -3268,9 +3272,12 @@ main(int argc, char **argv)
           const unsigned int size_x =
             params.time_integration_scheme == "spirk" ?
               params.irk_stages :
-              (params.time_integration_scheme == "complex-spirk" ?
+              (params.time_integration_scheme == "complex_spirk" ?
                  (params.irk_stages + 1) / 2 :
                  1);
+
+          std::cout << params.time_integration_scheme << " " << size_x
+                    << std::endl;
 
           AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(comm),
                       ExcMessage("Not enough ranks have been provided!"));
