@@ -1,13 +1,12 @@
 { 
     "FEDegree" : 1,
     "NRefinements" : 7,
-    "TimeIntegrationScheme" : "spirk", 
+    "TimeIntegrationScheme" : "complex_irk", 
     "IRKStages" : "5",
     "TimeStepSize" : "0.1",
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
     "BlockPreconditionerType" : "GMG",
-    "DoRowMajor" : true,
-    "Padding" : -1
+    "InnerTolerance" : 0.0
 }
 

@@ -534,9 +534,6 @@ namespace TimeIntegrationSchemes
 
       // ... solve
       cg.solve(sm, solution, system_rhs, preconditioner);
-
-      pcout << "   " << solver_control.last_step() << " CG iterations."
-            << std::endl;
     }
 
     void
@@ -596,6 +593,67 @@ namespace TimeIntegrationSchemes
 
     ConditionalOStream pcout;
   };
+
+
+
+  FullMatrix<typename VectorType::value_type>
+  load_matrix_from_file(const unsigned int n_stages, const std::string label)
+  {
+    FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
+
+    std::string file_name = label + std::to_string(n_stages) + ".txt";
+
+    std::ifstream fin;
+    fin.open(file_name);
+
+    if (fin.fail())
+      fin.open("../" + file_name);
+
+    AssertThrow(fin.fail() == false,
+                ExcMessage("File with the name " + file_name +
+                           " could not be found!"));
+
+    unsigned int m, n;
+    fin >> m >> n;
+
+    AssertDimension(m, n_stages);
+    AssertDimension(n, n_stages);
+
+    for (unsigned int i = 0; i < n_stages; ++i)
+      for (unsigned j = 0; j < n_stages; ++j)
+        fin >> result[i][j];
+
+    return result;
+  }
+
+  Vector<typename VectorType::value_type>
+  load_vector_from_file(const unsigned int n_stages, const std::string label)
+  {
+    Vector<typename VectorType::value_type> result(n_stages);
+
+    std::string file_name = label + std::to_string(n_stages) + ".txt";
+
+    std::ifstream fin;
+    fin.open(file_name);
+
+    if (fin.fail())
+      fin.open("../" + file_name);
+
+    AssertThrow(fin.fail() == false,
+                ExcMessage("File with the name " + file_name +
+                           " could not be found!"));
+
+    unsigned int m, n;
+    fin >> m >> n;
+
+    AssertDimension(m, 1);
+    AssertDimension(n, n_stages);
+
+    for (unsigned int i = 0; i < n_stages; ++i)
+      fin >> result[i];
+
+    return result;
+  }
 
 
 
@@ -669,67 +727,6 @@ namespace TimeIntegrationSchemes
       time_preconditioner_solver = 0.0;
     }
 
-  private:
-    static FullMatrix<typename VectorType::value_type>
-    load_matrix_from_file(const unsigned int n_stages, const std::string label)
-    {
-      FullMatrix<typename VectorType::value_type> result(n_stages, n_stages);
-
-      std::string file_name = label + std::to_string(n_stages) + ".txt";
-
-      std::ifstream fin;
-      fin.open(file_name);
-
-      if (fin.fail())
-        fin.open("../" + file_name);
-
-      AssertThrow(fin.fail() == false,
-                  ExcMessage("File with the name " + file_name +
-                             " could not be found!"));
-
-      unsigned int m, n;
-      fin >> m >> n;
-
-      AssertDimension(m, n_stages);
-      AssertDimension(n, n_stages);
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        for (unsigned j = 0; j < n_stages; ++j)
-          fin >> result[i][j];
-
-      return result;
-    }
-
-    static Vector<typename VectorType::value_type>
-    load_vector_from_file(const unsigned int n_stages, const std::string label)
-    {
-      Vector<typename VectorType::value_type> result(n_stages);
-
-      std::string file_name = label + std::to_string(n_stages) + ".txt";
-
-      std::ifstream fin;
-      fin.open(file_name);
-
-      if (fin.fail())
-        fin.open("../" + file_name);
-
-      AssertThrow(fin.fail() == false,
-                  ExcMessage("File with the name " + file_name +
-                             " could not be found!"));
-
-      unsigned int m, n;
-      fin >> m >> n;
-
-      AssertDimension(m, 1);
-      AssertDimension(n, n_stages);
-
-      for (unsigned int i = 0; i < n_stages; ++i)
-        fin >> result[i];
-
-      return result;
-    }
-
-  protected:
     const MPI_Comm     comm;
     const unsigned int n_stages;
     const bool         do_reduce_number_of_vmults;
@@ -1715,6 +1712,931 @@ namespace TimeIntegrationSchemes
     mutable ReshapedVectorType system_rhs;
     mutable ReshapedVectorType system_solution;
   };
+
+
+
+  /**
+   * Complex IRK base class.
+   */
+  class ComplexIRKBase : public Interface
+  {
+  public:
+    ComplexIRKBase(const MPI_Comm                        comm,
+                   const unsigned int                    n_stages,
+                   const MassLaplaceOperator &           op,
+                   const PreconditionerBase<VectorType> &block_preconditioner,
+                   const std::function<void(const double, VectorType &)>
+                     &evaluate_rhs_function)
+      : comm(comm)
+      , n_stages(n_stages)
+      , A_inv(load_matrix_from_file(n_stages, "A_inv"))
+      , T_re(load_matrix_from_file(n_stages, "T_re"))
+      , T_im(load_matrix_from_file(n_stages, "T_im"))
+      , T_inv_re(load_matrix_from_file(n_stages, "T_inv_re"))
+      , T_inv_im(load_matrix_from_file(n_stages, "T_inv_im"))
+      , b_vec(load_vector_from_file(n_stages, "b_vec_"))
+      , c_vec(load_vector_from_file(n_stages, "c_vec_"))
+      , d_vec_re(load_vector_from_file(n_stages, "D_vec_re_"))
+      , d_vec_im(load_vector_from_file(n_stages, "D_vec_im_"))
+      , op(op)
+      , block_preconditioner(block_preconditioner)
+      , evaluate_rhs_function(evaluate_rhs_function)
+      , pcout(std::cout, Utilities::MPI::this_mpi_process(comm) == 0)
+    {}
+
+    virtual void
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
+    {
+      (void)table;
+      (void)scaling_factor;
+    }
+
+  protected:
+    void
+    clear_timers() const
+    {}
+
+    const MPI_Comm                                    comm;
+    const unsigned int                                n_stages;
+    const FullMatrix<typename VectorType::value_type> A_inv;
+    const FullMatrix<typename VectorType::value_type> T_re;
+    const FullMatrix<typename VectorType::value_type> T_im;
+    const FullMatrix<typename VectorType::value_type> T_inv_re;
+    const FullMatrix<typename VectorType::value_type> T_inv_im;
+    const Vector<typename VectorType::value_type>     b_vec;
+    const Vector<typename VectorType::value_type>     c_vec;
+    const Vector<typename VectorType::value_type>     d_vec_re;
+    const Vector<typename VectorType::value_type>     d_vec_im;
+
+    const MassLaplaceOperator &           op;
+    const PreconditionerBase<VectorType> &block_preconditioner;
+
+    const std::function<void(const double, VectorType &)> evaluate_rhs_function;
+
+    ConditionalOStream pcout;
+  };
+
+
+
+  /**
+   * A parallel IRK implementation.
+   */
+  class ComplexIRK : public ComplexIRKBase
+  {
+  public:
+    ComplexIRK(const MPI_Comm                        comm,
+               const double                          outer_tolerance,
+               const double                          inner_tolerance,
+               const unsigned int                    n_stages,
+               const MassLaplaceOperator &           op,
+               const ComplexMassLaplaceOperator &    op_complex,
+               const PreconditionerBase<VectorType> &block_preconditioner,
+               const std::function<void(const double, VectorType &)>
+                 &evaluate_rhs_function)
+      : ComplexIRKBase(comm,
+                       n_stages,
+                       op,
+                       block_preconditioner,
+                       evaluate_rhs_function)
+      , n_max_iterations(1000)
+      , outer_tolerance(outer_tolerance)
+      , inner_tolerance(inner_tolerance)
+      , op_complex(op_complex)
+    {}
+
+    virtual void
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
+    {
+      (void)table;
+      (void)scaling_factor;
+    }
+
+    void
+    solve(VectorType &       solution,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const override
+    {
+      (void)timestep_number;
+
+      if (this->time_step != time_step)
+        {
+          preconditioners.clear();
+        }
+
+      this->time_step = time_step;
+
+      const unsigned int n_stages_reduced = (n_stages + 1) / 2;
+
+      if (preconditioners.size() == 0)
+        {
+          preconditioners.resize(n_stages_reduced);
+
+          for (unsigned int i = 0; i < n_stages_reduced; ++i)
+            {
+              op.reinit(d_vec_re[i * 2] + d_vec_im[i * 2], time_step);
+
+              preconditioners[i] = this->block_preconditioner.clone();
+              preconditioners[i]->reinit();
+            }
+        }
+
+      BlockVectorType system_rhs(n_stages);      // TODO
+      BlockVectorType system_solution(n_stages); //
+      VectorType      tmp;                       //
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        {
+          system_rhs.block(i).reinit(solution);
+          system_solution.block(i).reinit(solution);
+        }
+      tmp.reinit(solution);
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
+                              system_rhs.block(i));
+
+      op.vmult(tmp, solution, 0.0, -1.0);
+
+      for (unsigned int i = 0; i < n_stages; ++i)
+        system_rhs.block(i).add(1.0, tmp);
+
+      {
+        std::vector<typename VectorType::value_type> values(n_stages);
+
+        for (const auto e : solution.locally_owned_elements())
+          {
+            for (unsigned int j = 0; j < n_stages; ++j)
+              values[j] = system_rhs.block(j)[e];
+
+            for (unsigned int i = 0; i < n_stages; ++i)
+              {
+                system_rhs.block(i)[e] = 0.0;
+                for (unsigned int j = 0; j < n_stages; ++j)
+                  system_rhs.block(i)[e] += A_inv[i][j] * values[j];
+              }
+          }
+      }
+
+      const PreconditionComplex outer_preconditioner(n_stages,
+                                                     n_max_iterations,
+                                                     outer_tolerance,
+                                                     inner_tolerance,
+                                                     this->time_step,
+                                                     T_inv_re,
+                                                     T_inv_im,
+                                                     T_re,
+                                                     T_im,
+                                                     d_vec_re,
+                                                     d_vec_im,
+                                                     op,
+                                                     op_complex,
+                                                     preconditioners);
+
+      outer_preconditioner.vmult(system_solution, system_rhs);
+
+      const auto n_iterations =
+        outer_preconditioner.get_n_iterations_and_clear();
+
+      pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+            << std::get<1>(n_iterations[0]) << "+"
+            << std::get<2>(n_iterations[0]) << ")";
+      for (unsigned int i = 1; i < n_iterations.size(); ++i)
+        pcout << ", " << std::get<0>(n_iterations[0]) << " ("
+              << std::get<1>(n_iterations[0]) << "+"
+              << std::get<2>(n_iterations[0]) << ")";
+      pcout << std::endl;
+
+
+      // accumulate result in solution
+      for (unsigned int i = 0; i < n_stages; ++i)
+        solution.add(time_step * b_vec[i], system_solution.block(i));
+
+      if (timestep_number == 1)
+        clear_timers(); // clear timers since preconditioner is setup in
+                        // first time step
+    }
+
+  private:
+    class PreconditionComplex
+    {
+    public:
+      PreconditionComplex(
+        const unsigned int                                 n_stages,
+        const unsigned int                                 n_max_iterations,
+        const double                                       outer_tolerance,
+        const double                                       inner_tolerance,
+        const double                                       time_step,
+        const FullMatrix<typename VectorType::value_type> &T_inv_re,
+        const FullMatrix<typename VectorType::value_type> &T_inv_im,
+        const FullMatrix<typename VectorType::value_type> &T_re,
+        const FullMatrix<typename VectorType::value_type> &T_im,
+        const Vector<typename VectorType::value_type> &    d_vec_re,
+        const Vector<typename VectorType::value_type> &    d_vec_im,
+        const MassLaplaceOperator &                        op,
+        const ComplexMassLaplaceOperator &                 op_complex,
+        std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+          &preconditioners)
+        : n_stages(n_stages)
+        , n_max_iterations(n_max_iterations)
+        , outer_tolerance(outer_tolerance)
+        , inner_tolerance(inner_tolerance)
+        , time_step(time_step)
+        , T_inv_re(T_inv_re)
+        , T_inv_im(T_inv_im)
+        , T_re(T_re)
+        , T_im(T_im)
+        , d_vec_re(d_vec_re)
+        , d_vec_im(d_vec_im)
+        , op(op)
+        , op_complex(op_complex)
+        , preconditioners(preconditioners)
+      {
+        this->n_iterations.assign(
+          (n_stages + 1) / 2,
+          std::tuple<unsigned int, unsigned int, unsigned int>{0, 0, 0});
+      }
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        const unsigned int n_stages_reduced = (n_stages + 1) / 2;
+
+        std::vector<BlockVectorType> src_block(n_stages_reduced);
+        std::vector<BlockVectorType> dst_block(n_stages_reduced);
+
+        for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
+          {
+            src_block[i].reinit(2);
+            dst_block[i].reinit(2);
+
+            for (unsigned int j = 0; j < 2; ++j)
+              {
+                src_block[i].block(j).reinit(src.block(0));
+                dst_block[i].block(j).reinit(src.block(0));
+              }
+          }
+
+        // apply Tinv
+        for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
+          for (unsigned int j = 0; j < n_stages; ++j)
+            {
+              src_block[i].block(0).add(T_inv_re(i * 2, j), src.block(j));
+              src_block[i].block(1).add(T_inv_im(i * 2, j), src.block(j));
+            }
+
+        // solve blocks
+        for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
+          {
+            SolverControl solver_control(n_max_iterations,
+                                         outer_tolerance *
+                                           src.block(i * 2).size());
+            SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
+              solver(solver_control);
+
+            op_complex.reinit(d_vec_re[i * 2],
+                              d_vec_im[i * 2],
+                              this->time_step);
+
+            PreconditionPRESB presb(op,
+                                    *preconditioners[i],
+                                    inner_tolerance,
+                                    d_vec_re[i * 2],
+                                    d_vec_im[i * 2],
+                                    this->time_step);
+
+            solver.solve(op_complex, dst_block[i], src_block[i], presb);
+
+            const auto n_iterations_presb = presb.get_n_iterations_and_clear();
+
+            std::get<0>(this->n_iterations[i]) += solver_control.last_step();
+            std::get<1>(this->n_iterations[i]) += n_iterations_presb.first;
+            std::get<2>(this->n_iterations[i]) += n_iterations_presb.second;
+          }
+
+        // apply T
+        dst = 0;
+        for (unsigned int i = 0; i < n_stages; ++i)
+          for (unsigned int j = 0; j < n_stages_reduced; ++j) // sp
+            {
+              const double scaling = (j < (n_stages / 2)) ? 2.0 : 1.0;
+              dst.block(i).add(scaling * T_re(i, j * 2),
+                               dst_block[j].block(0),
+                               -scaling * T_im(i, j * 2),
+                               dst_block[j].block(1));
+            }
+      }
+
+      std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>
+      get_n_iterations_and_clear() const
+      {
+        const auto temp = this->n_iterations;
+        this->n_iterations.assign(
+          (n_stages + 1) / 2,
+          std::tuple<unsigned int, unsigned int, unsigned int>{0, 0, 0});
+        return temp;
+      }
+
+    private:
+      const unsigned int n_stages;
+
+      const unsigned int n_max_iterations;
+      const double       outer_tolerance;
+      const double       inner_tolerance;
+      const double       time_step;
+
+      const FullMatrix<typename VectorType::value_type> &T_inv_re;
+      const FullMatrix<typename VectorType::value_type> &T_inv_im;
+      const FullMatrix<typename VectorType::value_type> &T_re;
+      const FullMatrix<typename VectorType::value_type> &T_im;
+      const Vector<typename VectorType::value_type> &    d_vec_re;
+      const Vector<typename VectorType::value_type> &    d_vec_im;
+
+      const MassLaplaceOperator &       op;
+      const ComplexMassLaplaceOperator &op_complex;
+
+      std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+        &preconditioners;
+
+      mutable std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>
+        n_iterations;
+    };
+
+    class PreconditionPRESB
+    {
+    public:
+      PreconditionPRESB(const MassLaplaceOperator &           op,
+                        const PreconditionerBase<VectorType> &preconditioner,
+                        const double                          inner_tolerance,
+                        const double                          lambda_re,
+                        const double                          lambda_im,
+                        const double                          tau)
+        : op(op)
+        , preconditioner(preconditioner)
+        , inner_tolerance(inner_tolerance)
+        , lambda_re(lambda_re)
+        , lambda_im(lambda_im)
+        , tau(tau)
+        , n_iterations(0, 0)
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        VectorType temp_0, temp_1;
+        temp_0.reinit(src.block(0));
+        temp_1.reinit(src.block(0));
+
+        temp_0 = src.block(0);
+        temp_0 += src.block(1);
+
+        if (inner_tolerance == 0.0)
+          {
+            op.reinit(lambda_re + lambda_im, tau);
+            preconditioner.vmult(dst.block(0), temp_0);
+
+            n_iterations.first += 1;
+          }
+        else
+          {
+            SolverControl        reduction_control(100, inner_tolerance);
+            SolverCG<VectorType> solver(reduction_control);
+
+            op.reinit(lambda_re + lambda_im, tau);
+            solver.solve(op, dst.block(0), temp_0, preconditioner);
+
+            n_iterations.first += reduction_control.last_step();
+          }
+
+        op.reinit(lambda_im, 0.0);
+        op.vmult(temp_0, dst.block(0));
+        temp_0 *= -1.0;
+        temp_0 += src.block(1);
+
+        if (inner_tolerance == 0.0)
+          {
+            op.reinit(lambda_re + lambda_im, tau);
+            preconditioner.vmult(dst.block(1), temp_0);
+
+            n_iterations.second += 1;
+          }
+        else
+          {
+            SolverControl        reduction_control(100, inner_tolerance);
+            SolverCG<VectorType> solver(reduction_control);
+
+            op.reinit(lambda_re + lambda_im, tau);
+            solver.solve(op, dst.block(1), temp_0, preconditioner);
+
+            n_iterations.second += reduction_control.last_step();
+          }
+
+        dst.block(0) -= dst.block(1);
+      }
+
+      std::pair<unsigned int, unsigned int>
+      get_n_iterations_and_clear() const
+      {
+        const auto temp    = this->n_iterations;
+        this->n_iterations = {0, 0};
+        return temp;
+      }
+
+    private:
+      const MassLaplaceOperator &           op;
+      const PreconditionerBase<VectorType> &preconditioner;
+
+      const double inner_tolerance;
+
+      const double lambda_re;
+      const double lambda_im;
+      const double tau;
+
+      mutable std::pair<unsigned int, unsigned int> n_iterations;
+    };
+
+    const unsigned int n_max_iterations;
+    const double       outer_tolerance;
+    const double       inner_tolerance;
+
+    mutable double time_step = 0.0;
+
+    const ComplexMassLaplaceOperator &op_complex;
+
+    mutable std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
+      preconditioners;
+  };
+
+
+
+  /**
+   * A parallel IRK implementation.
+   */
+  class ComplexSPIRK : public ComplexIRKBase
+  {
+  public:
+    ComplexSPIRK(const MPI_Comm                        comm,
+                 const MPI_Comm                        comm_row,
+                 const double                          outer_tolerance,
+                 const double                          inner_tolerance,
+                 const unsigned int                    n_stages,
+                 const MassLaplaceOperator &           op,
+                 const ComplexMassLaplaceOperator &    op_complex,
+                 const PreconditionerBase<VectorType> &block_preconditioner,
+                 const std::function<void(const double, VectorType &)>
+                   &evaluate_rhs_function)
+      : ComplexIRKBase(comm,
+                       n_stages,
+                       op,
+                       block_preconditioner,
+                       evaluate_rhs_function)
+      , comm_row(comm_row)
+      , n_max_iterations(1000)
+      , outer_tolerance(outer_tolerance)
+      , inner_tolerance(inner_tolerance)
+      , op_complex(op_complex)
+    {
+      AssertThrow((n_stages + 1) / 2 ==
+                    Utilities::MPI::n_mpi_processes(comm_row),
+                  ExcInternalError());
+    }
+
+    virtual void
+    get_statistics(ConvergenceTable &table,
+                   const double      scaling_factor = 1.0) const override
+    {
+      (void)table;
+      (void)scaling_factor;
+    }
+
+    void
+    solve(VectorType &       solution,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const override
+    {
+      (void)timestep_number;
+
+      if (this->time_step != time_step)
+        {
+          preconditioners.reset();
+        }
+
+      this->time_step = time_step;
+
+      const unsigned int my_block = Utilities::MPI::this_mpi_process(comm_row);
+
+      if (preconditioners == nullptr)
+        {
+          op.reinit(d_vec_re[my_block * 2] + d_vec_im[my_block * 2], time_step);
+
+          preconditioners = this->block_preconditioner.clone();
+          preconditioners->reinit();
+        }
+
+      BlockVectorType system_rhs(2);      // TODO
+      BlockVectorType system_solution(2); //
+
+      VectorType tmp;
+      tmp.reinit(solution);
+
+      system_rhs.reinit(2);
+      system_rhs.block(0).reinit(solution);
+      system_rhs.block(1).reinit(solution);
+
+      system_solution.reinit(2);
+      system_solution.block(0).reinit(solution);
+      system_solution.block(1).reinit(solution);
+
+      for (unsigned int i = my_block * 2;
+           i < std::min(n_stages, (my_block + 1) * 2);
+           ++i)
+        evaluate_rhs_function(time + (c_vec[i] - 1.0) * time_step,
+                              system_solution.block(i % 2));
+
+      op.vmult(tmp, solution, 0.0, -1.0);
+
+      for (unsigned int i = my_block * 2;
+           i < std::min(n_stages, (my_block + 1) * 2);
+           ++i)
+        system_solution.block(i % 2).add(1.0, tmp);
+
+      matrix_vector_rol_operation(
+        system_rhs,
+        system_solution,
+        comm_row,
+        [&](const auto ii, const auto jj, auto &dst, const auto &src) {
+          for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2);
+               ++i)
+            for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
+                 ++j)
+              dst.block(i % 2).add(A_inv[i][j], src.block(j % 2));
+        });
+
+      for (auto &i : system_solution)
+        i = 0.0;
+
+      const PreconditionComplex outer_preconditioner(comm_row,
+                                                     n_stages,
+                                                     n_max_iterations,
+                                                     outer_tolerance,
+                                                     inner_tolerance,
+                                                     this->time_step,
+                                                     T_inv_re,
+                                                     T_inv_im,
+                                                     T_re,
+                                                     T_im,
+                                                     d_vec_re,
+                                                     d_vec_im,
+                                                     op,
+                                                     op_complex,
+                                                     preconditioners);
+
+      outer_preconditioner.vmult(system_solution, system_rhs);
+
+      const auto n_iterations = Utilities::MPI::all_gather(
+        comm_row, outer_preconditioner.get_n_iterations_and_clear());
+
+      pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+            << std::get<1>(n_iterations[0]) << "+"
+            << std::get<2>(n_iterations[0]) << ")";
+      for (unsigned int i = 1; i < n_iterations.size(); ++i)
+        pcout << ", " << std::get<0>(n_iterations[0]) << " ("
+              << std::get<1>(n_iterations[0]) << "+"
+              << std::get<2>(n_iterations[0]) << ")";
+      pcout << std::endl;
+
+
+      // accumulate result in solution
+      for (unsigned int i = my_block * 2;
+           i < std::min(n_stages, (my_block + 1) * 2);
+           ++i)
+        if ((i == 0) || (i % 2 == 1))
+          solution.add(time_step * b_vec[i], system_solution.block(i % 2));
+        else
+          solution.equ(time_step * b_vec[i], system_solution.block(i % 2));
+
+      MPI_Allreduce(MPI_IN_PLACE,
+                    solution.get_values(),
+                    solution.locally_owned_size(),
+                    MPI_DOUBLE,
+                    MPI_SUM,
+                    comm_row);
+
+      if (timestep_number == 1)
+        clear_timers(); // clear timers since preconditioner is setup in
+                        // first time step
+    }
+
+  private:
+    static void
+    matrix_vector_rol_operation(BlockVectorType &      dst,
+                                const BlockVectorType &src,
+                                const MPI_Comm         comm,
+                                std::function<void(unsigned int,
+                                                   unsigned int,
+                                                   BlockVectorType &,
+                                                   const BlockVectorType &)> fu)
+    {
+      const unsigned int rank  = Utilities::MPI::this_mpi_process(comm);
+      const unsigned int nproc = Utilities::MPI::n_mpi_processes(comm);
+
+      GrowingVectorMemory<BlockVectorType>            memory;
+      typename VectorMemory<BlockVectorType>::Pointer temp_pointer(memory);
+
+      BlockVectorType &temp = *temp_pointer;
+      temp.reinit(src.n_blocks());
+
+      for (unsigned int b = 0; b < src.n_blocks(); ++b)
+        {
+          temp.block(b).reinit(src.block(b), true);
+          temp.block(b).copy_locally_owned_data_from(src.block(b));
+        }
+
+      for (unsigned int k = 0; k < nproc; ++k)
+        {
+          if (k != 0)
+            {
+              for (unsigned int b = 0; b < src.n_blocks(); ++b)
+                {
+                  const auto ierr =
+                    MPI_Sendrecv_replace(temp.block(b).get_values(),
+                                         temp.block(b).locally_owned_size(),
+                                         MPI_DOUBLE,
+                                         (rank + nproc - 1) % nproc,
+                                         k + nproc * b,
+                                         (rank + nproc + 1) % nproc,
+                                         k + nproc * b,
+                                         comm,
+                                         MPI_STATUS_IGNORE);
+
+                  AssertThrowMPI(ierr);
+                }
+            }
+
+          fu(rank, (k + rank) % nproc, dst, temp);
+        }
+    }
+
+    class PreconditionComplex
+    {
+    public:
+      PreconditionComplex(
+        const MPI_Comm                                         comm_row,
+        const unsigned int                                     n_stages,
+        const unsigned int                                     n_max_iterations,
+        const double                                           outer_tolerance,
+        const double                                           inner_tolerance,
+        const double                                           time_step,
+        const FullMatrix<typename VectorType::value_type> &    T_inv_re,
+        const FullMatrix<typename VectorType::value_type> &    T_inv_im,
+        const FullMatrix<typename VectorType::value_type> &    T_re,
+        const FullMatrix<typename VectorType::value_type> &    T_im,
+        const Vector<typename VectorType::value_type> &        d_vec_re,
+        const Vector<typename VectorType::value_type> &        d_vec_im,
+        const MassLaplaceOperator &                            op,
+        const ComplexMassLaplaceOperator &                     op_complex,
+        std::unique_ptr<const PreconditionerBase<VectorType>> &preconditioners)
+        : comm_row(comm_row)
+        , n_stages(n_stages)
+        , n_max_iterations(n_max_iterations)
+        , outer_tolerance(outer_tolerance)
+        , inner_tolerance(inner_tolerance)
+        , time_step(time_step)
+        , T_inv_re(T_inv_re)
+        , T_inv_im(T_inv_im)
+        , T_re(T_re)
+        , T_im(T_im)
+        , d_vec_re(d_vec_re)
+        , d_vec_im(d_vec_im)
+        , op(op)
+        , op_complex(op_complex)
+        , preconditioners(preconditioners)
+      {
+        this->n_iterations =
+          std::tuple<unsigned int, unsigned int, unsigned int>{0, 0, 0};
+      }
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        const unsigned int my_block =
+          Utilities::MPI::this_mpi_process(comm_row);
+
+        BlockVectorType src_block(2);
+        BlockVectorType dst_block(2);
+
+        for (unsigned int j = 0; j < 2; ++j)
+          {
+            src_block.block(j).reinit(src.block(0));
+            dst_block.block(j).reinit(src.block(0));
+          }
+
+        // apply Tinv
+        matrix_vector_rol_operation(
+          src_block,
+          src,
+          comm_row,
+          [&](const auto ii, const auto jj, auto &dst, const auto &src) {
+            for (unsigned int j = jj * 2; j < std::min(n_stages, (jj + 1) * 2);
+                 ++j)
+              {
+                dst.block(0).add(T_inv_re(ii * 2, j), src.block(j % 2));
+                dst.block(1).add(T_inv_im(ii * 2, j), src.block(j % 2));
+              }
+          });
+
+        // solve blocks
+        {
+          SolverControl solver_control(n_max_iterations,
+                                       outer_tolerance * src.block(0).size());
+          SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
+            solver_control);
+
+          op_complex.reinit(d_vec_re[my_block * 2],
+                            d_vec_im[my_block * 2],
+                            this->time_step);
+
+          PreconditionPRESB presb(op,
+                                  *preconditioners,
+                                  inner_tolerance,
+                                  d_vec_re[my_block * 2],
+                                  d_vec_im[my_block * 2],
+                                  this->time_step);
+
+          solver.solve(op_complex, dst_block, src_block, presb);
+
+          const auto n_iterations_presb = presb.get_n_iterations_and_clear();
+
+          std::get<0>(this->n_iterations) += solver_control.last_step();
+          std::get<1>(this->n_iterations) += n_iterations_presb.first;
+          std::get<2>(this->n_iterations) += n_iterations_presb.second;
+        }
+
+        // apply T
+        dst = 0;
+
+        matrix_vector_rol_operation(
+          dst,
+          dst_block,
+          comm_row,
+          [&](const auto ii, const auto jj, auto &dst, const auto &src) {
+            for (unsigned int i = ii * 2; i < std::min(n_stages, (ii + 1) * 2);
+                 ++i)
+              {
+                const double scaling = (jj < (n_stages / 2)) ? 2.0 : 1.0;
+                dst.block(i % 2).add(scaling * T_re(i, jj * 2),
+                                     src.block(0),
+                                     -scaling * T_im(i, jj * 2),
+                                     src.block(1));
+              }
+          });
+      }
+
+      std::tuple<unsigned int, unsigned int, unsigned int>
+      get_n_iterations_and_clear() const
+      {
+        const auto temp = this->n_iterations;
+        this->n_iterations =
+          std::tuple<unsigned int, unsigned int, unsigned int>{0, 0, 0};
+        return temp;
+      }
+
+    private:
+      const MPI_Comm comm_row;
+
+      const unsigned int n_stages;
+
+      const unsigned int n_max_iterations;
+      const double       outer_tolerance;
+      const double       inner_tolerance;
+      const double       time_step;
+
+      const FullMatrix<typename VectorType::value_type> &T_inv_re;
+      const FullMatrix<typename VectorType::value_type> &T_inv_im;
+      const FullMatrix<typename VectorType::value_type> &T_re;
+      const FullMatrix<typename VectorType::value_type> &T_im;
+      const Vector<typename VectorType::value_type> &    d_vec_re;
+      const Vector<typename VectorType::value_type> &    d_vec_im;
+
+      const MassLaplaceOperator &       op;
+      const ComplexMassLaplaceOperator &op_complex;
+
+      std::unique_ptr<const PreconditionerBase<VectorType>> &preconditioners;
+
+      mutable std::tuple<unsigned int, unsigned int, unsigned int> n_iterations;
+    };
+
+    class PreconditionPRESB
+    {
+    public:
+      PreconditionPRESB(const MassLaplaceOperator &           op,
+                        const PreconditionerBase<VectorType> &preconditioner,
+                        const double                          inner_tolerance,
+                        const double                          lambda_re,
+                        const double                          lambda_im,
+                        const double                          tau)
+        : op(op)
+        , preconditioner(preconditioner)
+        , inner_tolerance(inner_tolerance)
+        , lambda_re(lambda_re)
+        , lambda_im(lambda_im)
+        , tau(tau)
+        , n_iterations(0, 0)
+      {}
+
+      void
+      vmult(BlockVectorType &dst, const BlockVectorType &src) const
+      {
+        VectorType temp_0, temp_1;
+        temp_0.reinit(src.block(0));
+        temp_1.reinit(src.block(0));
+
+        temp_0 = src.block(0);
+        temp_0 += src.block(1);
+
+        if (inner_tolerance == 0.0)
+          {
+            op.reinit(lambda_re + lambda_im, tau);
+            preconditioner.vmult(dst.block(0), temp_0);
+
+            n_iterations.first += 1;
+          }
+        else
+          {
+            SolverControl        reduction_control(100, inner_tolerance);
+            SolverCG<VectorType> solver(reduction_control);
+
+            op.reinit(lambda_re + lambda_im, tau);
+            solver.solve(op, dst.block(0), temp_0, preconditioner);
+
+            n_iterations.first += reduction_control.last_step();
+          }
+
+        op.reinit(lambda_im, 0.0);
+        op.vmult(temp_0, dst.block(0));
+        temp_0 *= -1.0;
+        temp_0 += src.block(1);
+
+        if (inner_tolerance == 0.0)
+          {
+            op.reinit(lambda_re + lambda_im, tau);
+            preconditioner.vmult(dst.block(1), temp_0);
+
+            n_iterations.second += 1;
+          }
+        else
+          {
+            SolverControl        reduction_control(100, inner_tolerance);
+            SolverCG<VectorType> solver(reduction_control);
+
+            op.reinit(lambda_re + lambda_im, tau);
+            solver.solve(op, dst.block(1), temp_0, preconditioner);
+
+            n_iterations.second += reduction_control.last_step();
+          }
+
+        dst.block(0) -= dst.block(1);
+      }
+
+      std::pair<unsigned int, unsigned int>
+      get_n_iterations_and_clear() const
+      {
+        const auto temp    = this->n_iterations;
+        this->n_iterations = {0, 0};
+        return temp;
+      }
+
+    private:
+      const MassLaplaceOperator &           op;
+      const PreconditionerBase<VectorType> &preconditioner;
+
+      const double inner_tolerance;
+
+      const double lambda_re;
+      const double lambda_im;
+      const double tau;
+
+      mutable std::pair<unsigned int, unsigned int> n_iterations;
+    };
+
+    const MPI_Comm comm_row;
+
+    const unsigned int n_max_iterations;
+    const double       outer_tolerance;
+    const double       inner_tolerance;
+
+    mutable double time_step = 0.0;
+
+    const ComplexMassLaplaceOperator &op_complex;
+
+    mutable std::unique_ptr<const PreconditionerBase<VectorType>>
+      preconditioners;
+  };
+
+
 } // namespace TimeIntegrationSchemes
 
 
@@ -1745,7 +2667,7 @@ namespace HeatEquation
     double outer_tolerance = 1e-8;
     double inner_tolerance = 1e-6;
 
-    bool do_output_paraview = false;
+    bool do_output_paraview = true;
 
     void
     parse(const std::string file_name)
@@ -1756,7 +2678,8 @@ namespace HeatEquation
       prm.add_parameter("TimeIntegrationScheme",
                         time_integration_scheme,
                         "",
-                        Patterns::Selection("ost|irk|spirk"));
+                        Patterns::Selection(
+                          "ost|irk|spirk|complex_irk|complex_spirk"));
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
@@ -1818,7 +2741,8 @@ namespace HeatEquation
       setup_system();
 
       // select operator
-      std::unique_ptr<MassLaplaceOperator> mass_laplace_operator;
+      std::unique_ptr<MassLaplaceOperator>        mass_laplace_operator;
+      std::unique_ptr<ComplexMassLaplaceOperator> complex_mass_laplace_operator;
 
       if (params.operator_type == "MatrixBased")
         mass_laplace_operator =
@@ -1946,6 +2870,57 @@ namespace HeatEquation
             *mass_laplace_operator,
             *preconditioner,
             evaluate_rhs_function);
+      else if (params.time_integration_scheme == "complex_irk")
+        {
+          if (params.operator_type == "MatrixFree")
+            complex_mass_laplace_operator = std::make_unique<
+              ComplexMassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
+                                                                 constraints,
+                                                                 quadrature);
+          else
+            AssertThrow(false, ExcNotImplemented());
+
+          if (false)
+            complex_mass_laplace_operator->set_scalar_operator(
+              *mass_laplace_operator);
+
+          time_integration_scheme =
+            std::make_unique<TimeIntegrationSchemes::ComplexIRK>(
+              comm_global,
+              params.outer_tolerance,
+              params.inner_tolerance,
+              params.irk_stages,
+              *mass_laplace_operator,
+              *complex_mass_laplace_operator,
+              *preconditioner,
+              evaluate_rhs_function);
+        }
+      else if (params.time_integration_scheme == "complex_spirk")
+        {
+          if (params.operator_type == "MatrixFree")
+            complex_mass_laplace_operator = std::make_unique<
+              ComplexMassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
+                                                                 constraints,
+                                                                 quadrature);
+          else
+            AssertThrow(false, ExcNotImplemented());
+
+          if (false)
+            complex_mass_laplace_operator->set_scalar_operator(
+              *mass_laplace_operator);
+
+          time_integration_scheme =
+            std::make_unique<TimeIntegrationSchemes::ComplexSPIRK>(
+              comm_global,
+              comm_row,
+              params.outer_tolerance,
+              params.inner_tolerance,
+              params.irk_stages,
+              *mass_laplace_operator,
+              *complex_mass_laplace_operator,
+              *preconditioner,
+              evaluate_rhs_function);
+        }
       else
         Assert(false, ExcNotImplemented());
 
@@ -2293,7 +3268,11 @@ main(int argc, char **argv)
             }
 
           const unsigned int size_x =
-            params.time_integration_scheme == "spirk" ? params.irk_stages : 1;
+            params.time_integration_scheme == "spirk" ?
+              params.irk_stages :
+              (params.time_integration_scheme == "complex_spirk" ?
+                 (params.irk_stages + 1) / 2 :
+                 1);
 
           AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(comm),
                       ExcMessage("Not enough ranks have been provided!"));
