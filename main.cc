@@ -3274,9 +3274,6 @@ main(int argc, char **argv)
                  (params.irk_stages + 1) / 2 :
                  1);
 
-          std::cout << params.time_integration_scheme << " " << size_x
-                    << std::endl;
-
           AssertThrow(size_x <= Utilities::MPI::n_mpi_processes(comm),
                       ExcMessage("Not enough ranks have been provided!"));
 
