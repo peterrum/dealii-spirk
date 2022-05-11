@@ -115,12 +115,10 @@ namespace dealii
       Asearch.reinit(x);
       p.reinit(x);
 
-      preconditioner.vmult(search, b);
-      double res = search.l2_norm();
-
       A.vmult(p, x);
       p.add(-1., b);
-      preconditioner.vmult(search, p);
+
+      double res = p.l2_norm();
 
       unsigned int it = 0;
 
@@ -131,6 +129,8 @@ namespace dealii
       while (conv == SolverControl::iterate)
         {
           it++;
+
+          preconditioner.vmult(search, p);
 
           H_vec(it - 1, x);
           Hd_vec(it - 1, x);
@@ -157,9 +157,7 @@ namespace dealii
           x.add(-c_preloc, search);
           p.add(-c_preloc, Asearch);
 
-          preconditioner.vmult(search, p);
-
-          res = search.l2_norm();
+          res = p.l2_norm();
 
           conv = this->iteration_status(it, res, x);
         }
