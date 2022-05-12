@@ -90,3 +90,12 @@ cd small-scaling
 python ../../IRK/scripts/small_scaling.py 4 16
 sbatch ../../IRK/experiments-skx/parameters-0768.cmd
 cd ..
+
+
+```
+mkdir -p parameters-complex-q
+cd parameters-complex-q
+python ../../IRK/scripts/parameters_q.py "complex_"
+sbatch ../../IRK/experiments-skx/parameters-0768.cmd
+cd ..
+```

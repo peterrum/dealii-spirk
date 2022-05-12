@@ -1,5 +1,6 @@
- import json
+import json
 import os
+import sys 
 
 def run_instance(counter, n_refinements, scheme, do_row_major):
     with open(os.path.dirname(os.path.abspath(__file__)) + "/default.json", 'r') as f:
@@ -9,6 +10,9 @@ def run_instance(counter, n_refinements, scheme, do_row_major):
     datastore["NRefinements"]          = n_refinements
     datastore["TimeIntegrationScheme"] = scheme
     datastore["IRKStages"]             = do_row_major
+
+    if(scheme.startswith('complex_')):
+        datastore["InnerTolerance"] = 0.0
 
     # write data to output file
     with open("./input_%s.json" % (str(counter).zfill(4)), 'w') as f:

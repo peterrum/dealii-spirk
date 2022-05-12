@@ -4,11 +4,12 @@
     "TimeIntegrationScheme" : "spirk", 
     "IRKStages" : "4",
     "OuterTolerance" : "1e-8",
-    "InnerTolerance" : "1e-6",
+    "InnerTolerance" : "1e-8",
     "TimeStepSize" : "0.1",
     "EndTime" : "1.0",
     "OperatorType" : "MatrixFree",
     "BlockPreconditionerType" : "GMG",
     "DoRowMajor" : true,
-    "Padding" : -1
+    "Padding" : -1,
+    "DoOutputParaview" : false
 }

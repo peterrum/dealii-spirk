@@ -795,9 +795,9 @@ namespace TimeIntegrationSchemes
         table.set_scientific(label, true);
       };
 
-      for (unsigned int i = 0; i < n_stages; ++i)
+      for (unsigned int i = 0; i < 10; ++i)
         add_time("t_prec_solver_" + std::to_string(i),
-                 times_preconditioner_solver[i]);
+                 (i < n_stages) ? (times_preconditioner_solver[i]) : 0.0);
     }
 
     void
@@ -885,8 +885,7 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   outer_tolerance * n_stages *
-                                     system_rhs.block(0).size());
+                                   outer_tolerance);
 
       std::string solver_name = "";
 
@@ -1231,10 +1230,10 @@ namespace TimeIntegrationSchemes
         Utilities::MPI::all_gather(comm_row, time_preconditioner_solver),
         this->comm);
 
-      for (unsigned int i = 0; i < n_stages; ++i)
+      for (unsigned int i = 0; i < 10; ++i)
         {
           const std::string label = "t_prec_solver_" + std::to_string(i);
-          table.add_value(label, temp[i].avg / 1e9);
+          table.add_value(label, (i < n_stages) ? (temp[i].avg / 1e9) : 0.0);
           table.set_scientific(label, true);
         }
     }
@@ -1309,8 +1308,7 @@ namespace TimeIntegrationSchemes
 
       // solve system
       SolverControl solver_control(n_max_iterations,
-                                   outer_tolerance * n_stages *
-                                     system_rhs.size());
+                                   outer_tolerance);
 
       std::string solver_name = "";
 
@@ -1746,14 +1744,43 @@ namespace TimeIntegrationSchemes
     get_statistics(ConvergenceTable &table,
                    const double      scaling_factor = 1.0) const override
     {
-      (void)table;
-      (void)scaling_factor;
+      table.add_value("n_outer", n_outer_iterations / scaling_factor);
+
+      const auto n_inner_iterations_min_max_avg =
+        Utilities::MPI::min_max_avg(n_inner_iterations / n_outer_iterations,
+                                    comm);
+
+      table.add_value("n_inner_min", n_inner_iterations_min_max_avg.min);
+      table.add_value("n_inner_avg", n_inner_iterations_min_max_avg.avg);
+      table.add_value("n_inner_max", n_inner_iterations_min_max_avg.max);
+
+      const auto add_time = [&](const std::string label, const double value) {
+        const auto stat = Utilities::MPI::min_max_avg(value, comm);
+        table.add_value(label, stat.avg / 1e9);
+        table.set_scientific(label, true);
+      };
+
+      add_time("t", time_total);
+      add_time("t_rhs", time_rhs);
+      add_time("t_solver", time_outer_solver);
+      add_time("t_update", time_solution_update);
+      add_time("t_vmult", time_system_vmult);
+      add_time("t_prec_bc", time_preconditioner_bc);
+      add_time("t_prec_solver", time_preconditioner_solver);
     }
 
   protected:
     void
     clear_timers() const
-    {}
+    {
+      time_total                 = 0.0;
+      time_rhs                   = 0.0;
+      time_outer_solver          = 0.0;
+      time_solution_update       = 0.0;
+      time_system_vmult          = 0.0;
+      time_preconditioner_bc     = 0.0;
+      time_preconditioner_solver = 0.0;
+    }
 
     const MPI_Comm                                    comm;
     const unsigned int                                n_stages;
@@ -1773,6 +1800,17 @@ namespace TimeIntegrationSchemes
     const std::function<void(const double, VectorType &)> evaluate_rhs_function;
 
     ConditionalOStream pcout;
+
+    mutable double time_total                 = 0.0;
+    mutable double time_rhs                   = 0.0;
+    mutable double time_outer_solver          = 0.0;
+    mutable double time_solution_update       = 0.0;
+    mutable double time_system_vmult          = 0.0;
+    mutable double time_preconditioner_bc     = 0.0;
+    mutable double time_preconditioner_solver = 0.0;
+
+    mutable double n_outer_iterations = 0;
+    mutable double n_inner_iterations = 0;
   };
 
 
@@ -1807,8 +1845,7 @@ namespace TimeIntegrationSchemes
     get_statistics(ConvergenceTable &table,
                    const double      scaling_factor = 1.0) const override
     {
-      (void)table;
-      (void)scaling_factor;
+      ComplexIRKBase::get_statistics(table, scaling_factor);
     }
 
     void
@@ -1840,6 +1877,9 @@ namespace TimeIntegrationSchemes
               preconditioners[i]->reinit();
             }
         }
+
+      const auto time_total = std::chrono::system_clock::now();
+      const auto time_rhs   = std::chrono::system_clock::now();
 
       BlockVectorType system_rhs(n_stages);      // TODO
       BlockVectorType system_solution(n_stages); //
@@ -1878,6 +1918,12 @@ namespace TimeIntegrationSchemes
           }
       }
 
+      this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::system_clock::now() - time_rhs)
+                          .count();
+
+      const auto time_outer_solver = std::chrono::system_clock::now();
+
       const PreconditionComplex outer_preconditioner(n_stages,
                                                      n_max_iterations,
                                                      outer_tolerance,
@@ -1895,22 +1941,43 @@ namespace TimeIntegrationSchemes
 
       outer_preconditioner.vmult(system_solution, system_rhs);
 
+      this->time_outer_solver +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_outer_solver)
+          .count();
+
       const auto n_iterations =
         outer_preconditioner.get_n_iterations_and_clear();
 
+      for (const auto i : n_iterations)
+      {
+          this->n_outer_iterations += std::get<0>(i);
+          this->n_inner_iterations += std::get<1>(i) + std::get<2>(i);
+      }
+      
       pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
             << std::get<1>(n_iterations[0]) << "+"
             << std::get<2>(n_iterations[0]) << ")";
       for (unsigned int i = 1; i < n_iterations.size(); ++i)
-        pcout << ", " << std::get<0>(n_iterations[0]) << " ("
-              << std::get<1>(n_iterations[0]) << "+"
-              << std::get<2>(n_iterations[0]) << ")";
+        pcout << ", " << std::get<0>(n_iterations[i]) << " ("
+              << std::get<1>(n_iterations[i]) << "+"
+              << std::get<2>(n_iterations[i]) << ")";
       pcout << std::endl;
-
+      
+      const auto time_solution_update = std::chrono::system_clock::now();
 
       // accumulate result in solution
       for (unsigned int i = 0; i < n_stages; ++i)
         solution.add(time_step * b_vec[i], system_solution.block(i));
+
+      this->time_solution_update +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_solution_update)
+          .count();
+
+      this->time_total += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::system_clock::now() - time_total)
+                            .count();
 
       if (timestep_number == 1)
         clear_timers(); // clear timers since preconditioner is setup in
@@ -1988,9 +2055,7 @@ namespace TimeIntegrationSchemes
         // solve blocks
         for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           {
-            SolverControl solver_control(n_max_iterations,
-                                         outer_tolerance *
-                                           src.block(i * 2).size());
+            SolverControl solver_control(n_max_iterations, outer_tolerance);
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
@@ -2205,8 +2270,7 @@ namespace TimeIntegrationSchemes
     get_statistics(ConvergenceTable &table,
                    const double      scaling_factor = 1.0) const override
     {
-      (void)table;
-      (void)scaling_factor;
+      ComplexIRKBase::get_statistics(table, scaling_factor);
     }
 
     void
@@ -2233,6 +2297,9 @@ namespace TimeIntegrationSchemes
           preconditioners = this->block_preconditioner.clone();
           preconditioners->reinit();
         }
+
+      const auto time_total = std::chrono::system_clock::now();
+      const auto time_rhs   = std::chrono::system_clock::now();
 
       BlockVectorType system_rhs(2);      // TODO
       BlockVectorType system_solution(2); //
@@ -2276,6 +2343,12 @@ namespace TimeIntegrationSchemes
       for (auto &i : system_solution)
         i = 0.0;
 
+      this->time_rhs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::system_clock::now() - time_rhs)
+                          .count();
+
+      const auto time_outer_solver = std::chrono::system_clock::now();
+
       const PreconditionComplex outer_preconditioner(comm_row,
                                                      n_stages,
                                                      n_max_iterations,
@@ -2294,8 +2367,18 @@ namespace TimeIntegrationSchemes
 
       outer_preconditioner.vmult(system_solution, system_rhs);
 
+      this->time_outer_solver +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_outer_solver)
+          .count();
+
+      const auto n_iterations_my = outer_preconditioner.get_n_iterations_and_clear();
+
+      this->n_outer_iterations += std::get<0>(n_iterations_my);
+      this->n_inner_iterations += std::get<1>(n_iterations_my) + std::get<2>(n_iterations_my);
+      
       const auto n_iterations = Utilities::MPI::all_gather(
-        comm_row, outer_preconditioner.get_n_iterations_and_clear());
+        comm_row, n_iterations_my);
 
       pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
             << std::get<1>(n_iterations[0]) << "+"
@@ -2305,7 +2388,8 @@ namespace TimeIntegrationSchemes
               << std::get<1>(n_iterations[0]) << "+"
               << std::get<2>(n_iterations[0]) << ")";
       pcout << std::endl;
-
+      
+      const auto time_solution_update = std::chrono::system_clock::now();
 
       // accumulate result in solution
       for (unsigned int i = my_block * 2;
@@ -2322,6 +2406,15 @@ namespace TimeIntegrationSchemes
                     MPI_DOUBLE,
                     MPI_SUM,
                     comm_row);
+
+      this->time_solution_update +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now() - time_solution_update)
+          .count();
+
+      this->time_total += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::system_clock::now() - time_total)
+                            .count();
 
       if (timestep_number == 1)
         clear_timers(); // clear timers since preconditioner is setup in
@@ -2448,8 +2541,7 @@ namespace TimeIntegrationSchemes
 
         // solve blocks
         {
-          SolverControl solver_control(n_max_iterations,
-                                       outer_tolerance * src.block(0).size());
+          SolverControl solver_control(n_max_iterations, outer_tolerance);
           SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
             solver_control);
 
