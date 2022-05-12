@@ -1778,7 +1778,7 @@ namespace TimeIntegrationSchemes
 
 
   /**
-   * A parallel IRK implementation.
+   * A parallel complex IRK implementation.
    */
   class ComplexIRK : public ComplexIRKBase
   {
@@ -2170,7 +2170,7 @@ namespace TimeIntegrationSchemes
 
 
   /**
-   * A parallel IRK implementation.
+   * A stage-parallel complex IRK implementation.
    */
   class ComplexSPIRK : public ComplexIRKBase
   {
