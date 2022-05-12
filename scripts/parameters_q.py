@@ -1,4 +1,4 @@
-import json
+ import json
 import os
 
 def run_instance(counter, n_refinements, scheme, do_row_major):
@@ -15,16 +15,22 @@ def run_instance(counter, n_refinements, scheme, do_row_major):
         json.dump(datastore, f, indent=4, separators=(',', ': '))
 
 def main():    
+    
+    prefix = ""
+
+    if(len(sys.argv) > 1):
+      prefix = sys.argv[1]
+
     counter = 0
 
     for n_refinements in range(3,20):
         for n_stages in [2, 4, 6, 8]:
             # IRK
-            run_instance(counter, n_refinements, "irk", n_stages)
+            run_instance(counter, n_refinements, prefix + "irk", n_stages)
             counter = counter + 1;
 
             # SPIRK (row major)
-            run_instance(counter, n_refinements, "spirk", n_stages)
+            run_instance(counter, n_refinements, prefix + "spirk", n_stages)
             counter = counter + 1;
 
 
