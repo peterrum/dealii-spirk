@@ -4,7 +4,7 @@
     "TimeIntegrationScheme" : "spirk", 
     "IRKStages" : "4",
     "OuterTolerance" : "1e-8",
-    "InnerTolerance" : "1e-8",
+    "InnerTolerance" : "0.0",
     "TimeStepSize" : "0.1",
     "EndTime" : "1.0",
     "OperatorType" : "MatrixFree",

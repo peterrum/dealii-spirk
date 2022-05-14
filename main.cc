@@ -884,14 +884,14 @@ namespace TimeIntegrationSchemes
       const auto time_outer_solver = std::chrono::system_clock::now();
 
       // solve system
-      SolverControl solver_control(n_max_iterations,
+      ReductionControl solver_control(n_max_iterations, 1e-20,
                                    outer_tolerance);
 
       std::string solver_name = "";
 
       try
         {
-          if (true)
+          if (false)
             {
               solver_name = "GCR";
 
@@ -1095,7 +1095,7 @@ namespace TimeIntegrationSchemes
 
             if (inner_tolerance > 0.0)
               {
-                SolverControl solver_control(n_max_iterations, inner_tolerance);
+                ReductionControl solver_control(n_max_iterations, 1e-10, inner_tolerance);
                 SolverCG<VectorType> solver(solver_control);
 
                 op.reinit(d_vec[i], tau);
@@ -1307,14 +1307,14 @@ namespace TimeIntegrationSchemes
       const auto time_outer_solver = std::chrono::system_clock::now();
 
       // solve system
-      SolverControl solver_control(n_max_iterations,
+      ReductionControl solver_control(n_max_iterations, 1e-20,
                                    outer_tolerance);
 
       std::string solver_name = "";
 
       try
         {
-          if (true)
+          if (false)
             {
               solver_name = "GCR";
 
@@ -1615,7 +1615,7 @@ namespace TimeIntegrationSchemes
             std::unique_ptr<SolverControl> solver_control;
 
             if (true)
-              solver_control = std::make_unique<SolverControl>(n_max_iterations,
+              solver_control = std::make_unique<ReductionControl>(n_max_iterations, 1e-20,
                                                                inner_tolerance);
             else
               solver_control =
@@ -2055,7 +2055,7 @@ namespace TimeIntegrationSchemes
         // solve blocks
         for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           {
-            SolverControl solver_control(n_max_iterations, outer_tolerance);
+            ReductionControl solver_control(n_max_iterations, 1e-20, outer_tolerance);
             SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
               solver(solver_control);
 
@@ -2541,7 +2541,7 @@ namespace TimeIntegrationSchemes
 
         // solve blocks
         {
-          SolverControl solver_control(n_max_iterations, outer_tolerance);
+          ReductionControl solver_control(n_max_iterations, 1e-20, outer_tolerance);
           SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
             solver_control);
 

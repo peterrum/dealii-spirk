@@ -18,7 +18,7 @@ def main():
     counter = 0
 
     for n_refinements in range(3,20):
-        for tol in [1e-4, 1e-5, 1e-6, 1e-7, 1e-8]:
+        for tol in [0.0, 1e-1, 1e-2, 1e-3, 1e-4]:
             # IRK
             run_instance(counter, n_refinements, "irk", tol)
             counter = counter + 1;
