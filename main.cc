@@ -690,7 +690,7 @@ namespace TimeIntegrationSchemes
       table.add_value("n_outer", n_outer_iterations / scaling_factor);
 
       const auto n_inner_iterations_min_max_avg =
-        Utilities::MPI::min_max_avg(n_inner_iterations / n_outer_iterations,
+        Utilities::MPI::min_max_avg(n_inner_iterations / scaling_factor,
                                     comm);
 
       table.add_value("n_inner_min", n_inner_iterations_min_max_avg.min);
@@ -1763,7 +1763,7 @@ namespace TimeIntegrationSchemes
       table.add_value("n_outer_max", n_outer_iterations_min_max_avg.max);
 
       const auto n_inner_iterations_min_max_avg =
-        Utilities::MPI::min_max_avg(n_inner_iterations / n_outer_iterations,
+        Utilities::MPI::min_max_avg(n_inner_iterations / scaling_factor,
                                     comm);
 
       table.add_value("n_inner_min", n_inner_iterations_min_max_avg.min);
@@ -3116,7 +3116,7 @@ namespace HeatEquation
       table.add_value("error_Linf", error.second);
       table.set_scientific("error_Linf", true);
 
-      time_integration_scheme->get_statistics(table, timestep_number);
+      time_integration_scheme->get_statistics(table, timestep_number - 1);
     }
 
   private:
