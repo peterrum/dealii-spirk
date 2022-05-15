@@ -7,8 +7,8 @@ function irk_ev(s)
  
 
   function save_matrix(A, name)
-    name
-    A
+    name;
+    A;
     A = [size(A) reshape(A',1, size(A,1) * size(A,2))];
     temp = A';
     file_name = strcat(name,s,".txt");
@@ -16,8 +16,8 @@ function irk_ev(s)
   end 
 
   function save_vector(A, name)
-    name
-    A = diag(A)
+    name;
+    A = diag(A);
     A = [size(A') reshape(A,1, size(A,1) * size(A,2))];
     temp = A';
     file_name = strcat(name,s,".txt");
@@ -26,7 +26,7 @@ function irk_ev(s)
   
   A = load_matrix("A");
 
-  A
+  A;
 
   Ainv = A^-1
   save_matrix(Ainv, "A_inv");
@@ -34,6 +34,12 @@ function irk_ev(s)
   [l,u,p] = lu(sparse(Ainv.'),0);
   Lnew = full(u).';
   Unew = full(l).';
+
+  if true
+    [U, T] = schur(Ainv)
+    Ainv
+    U*T*U'
+  end
 
   if false
     [V,D] = eig(Lnew);
@@ -44,11 +50,22 @@ function irk_ev(s)
   
   if true
     [V,D] = eig(Ainv);
+     Vinv = V^-1;
+
+     [DD,I] = sort(-diag(D*D'));
+     
+
+     V = V(:, I);
+     Vinv = Vinv(I, : );
+     D = D(I,I);
+
+     V
+     D
 
     save_matrix(real(V), "T_re")
     save_matrix(imag(V), "T_im")
-    save_matrix(real(V^-1), "T_inv_re")
-    save_matrix(imag(V^-1), "T_inv_im")
+    save_matrix(real(Vinv), "T_inv_re")
+    save_matrix(imag(Vinv), "T_inv_im")
     save_vector(real(D), "D_vec_re_")
     save_vector(imag(D), "D_vec_im_")
   end
