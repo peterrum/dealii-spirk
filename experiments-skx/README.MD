@@ -1,42 +1,42 @@
 ```bash
-mkdir large-scaling-2-1
+mkdir -p large-scaling-2-1
 cd large-scaling-2-1
 python ../../IRK/scripts/large_scaling.py 2 1
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 64
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
-mkdir large-scaling-4-1
+mkdir -p large-scaling-4-1
 cd large-scaling-4-1
 python ../../IRK/scripts/large_scaling.py 4 1
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 64
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
-mkdir large-scaling-9-1
+mkdir -p large-scaling-9-1
 cd large-scaling-9-1
 python ../../IRK/scripts/large_scaling.py 9 1
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 64
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
 
 
-mkdir large-scaling-2-4
+mkdir -p large-scaling-2-4
 cd large-scaling-2-4
 python ../../IRK/scripts/large_scaling.py 2 4
 python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
-mkdir large-scaling-4-4
+mkdir -p large-scaling-4-4
 cd large-scaling-4-4
 python ../../IRK/scripts/large_scaling.py 4 4
 python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
-mkdir large-scaling-9-4
+mkdir -p large-scaling-9-4
 cd large-scaling-9-4
 python ../../IRK/scripts/large_scaling.py 9 4
 python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
@@ -48,7 +48,9 @@ cd ..
 mkdir -p parameters-vt
 cd parameters-vt
 python ../../IRK/scripts/parameters_vt.py
+sbatch ../../IRK/experiments-skx/parameters-0048.cmd
 sbatch ../../IRK/experiments-skx/parameters-0768.cmd
+sbatch ../../IRK/experiments-skx/parameters-3072.cmd
 cd ..
 
 mkdir -p parameters-dt
@@ -90,3 +92,13 @@ cd small-scaling
 python ../../IRK/scripts/small_scaling.py 4 16
 sbatch ../../IRK/experiments-skx/parameters-0768.cmd
 cd ..
+```
+
+
+```bash
+mkdir -p parameters-complex-q
+cd parameters-complex-q
+python ../../IRK/scripts/parameters_q.py "complex_"
+sbatch ../../IRK/experiments-skx/parameters-0768.cmd
+cd ..
+```

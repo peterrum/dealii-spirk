@@ -537,7 +537,7 @@ public:
                                        EvaluationFlags::values |
                                          EvaluationFlags::gradients);
 
-                for (const auto q : phi_re.quadrature_point_indices())
+                for (unsigned int q = 0; q < phi_re.n_q_points; ++q)
                   {
                     const auto value_re    = phi_re.get_value(q);
                     const auto value_im    = phi_im.get_value(q);
