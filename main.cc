@@ -226,9 +226,9 @@ namespace dealii
       }
 
       void
-      reinit(const VT &V, const MPI_Comm &row_comm)
+      reinit(const VT &V, const MPI_Comm &row_comm, const MPI_Comm &sm_comm = MPI_COMM_SELF)
       {
-        VT::reinit(V.get_partitioner(), row_comm);
+        VT::reinit(V.get_partitioner(), sm_comm);
         this->row_comm = row_comm;
       }
 
@@ -1284,8 +1284,17 @@ namespace TimeIntegrationSchemes
 
       VectorType tmp;
 
-      system_rhs.reinit(solution, comm_row);
-      system_solution.reinit(solution, comm_row);
+      if(use_sm)
+      {
+          system_rhs.reinit(solution, comm_row, comm_row);
+          system_solution.reinit(solution, comm_row, comm_row);
+      }
+      else
+      {
+          system_rhs.reinit(solution, comm_row);
+          system_solution.reinit(solution, comm_row);
+      }
+      
       tmp.reinit(solution);
 
       const unsigned int my_stage = Utilities::MPI::this_mpi_process(comm_row);
@@ -1744,7 +1753,14 @@ namespace TimeIntegrationSchemes
     get_statistics(ConvergenceTable &table,
                    const double      scaling_factor = 1.0) const override
     {
-      table.add_value("n_outer", n_outer_iterations / scaling_factor);
+
+      const auto n_outer_iterations_min_max_avg =
+        Utilities::MPI::min_max_avg(n_outer_iterations / scaling_factor,
+                                    comm);
+      
+      table.add_value("n_outer_min", n_outer_iterations_min_max_avg.min);
+      table.add_value("n_outer_avg", n_outer_iterations_min_max_avg.avg);
+      table.add_value("n_outer_max", n_outer_iterations_min_max_avg.max);
 
       const auto n_inner_iterations_min_max_avg =
         Utilities::MPI::min_max_avg(n_inner_iterations / n_outer_iterations,
@@ -2056,8 +2072,6 @@ namespace TimeIntegrationSchemes
         for (unsigned int i = 0; i < n_stages_reduced; ++i) // sp
           {
             ReductionControl solver_control(n_max_iterations, 1e-20, outer_tolerance);
-            SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
-              solver(solver_control);
 
             op_complex.reinit(d_vec_re[i * 2],
                               d_vec_im[i * 2],
@@ -2070,7 +2084,18 @@ namespace TimeIntegrationSchemes
                                     d_vec_im[i * 2],
                                     this->time_step);
 
+            if(false)
+            {
+            SolverGCR<LinearAlgebra::distributed::BlockVector<double>>
+              solver(solver_control);
             solver.solve(op_complex, dst_block[i], src_block[i], presb);
+            }
+            else
+            {
+            SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
+              solver(solver_control);
+            solver.solve(op_complex, dst_block[i], src_block[i], presb);
+            }
 
             const auto n_iterations_presb = presb.get_n_iterations_and_clear();
 
@@ -2384,9 +2409,9 @@ namespace TimeIntegrationSchemes
             << std::get<1>(n_iterations[0]) << "+"
             << std::get<2>(n_iterations[0]) << ")";
       for (unsigned int i = 1; i < n_iterations.size(); ++i)
-        pcout << ", " << std::get<0>(n_iterations[0]) << " ("
-              << std::get<1>(n_iterations[0]) << "+"
-              << std::get<2>(n_iterations[0]) << ")";
+        pcout << ", " << std::get<0>(n_iterations[i]) << " ("
+              << std::get<1>(n_iterations[i]) << "+"
+              << std::get<2>(n_iterations[i]) << ")";
       pcout << std::endl;
       
       const auto time_solution_update = std::chrono::system_clock::now();
@@ -2542,8 +2567,6 @@ namespace TimeIntegrationSchemes
         // solve blocks
         {
           ReductionControl solver_control(n_max_iterations, 1e-20, outer_tolerance);
-          SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
-            solver_control);
 
           op_complex.reinit(d_vec_re[my_block * 2],
                             d_vec_im[my_block * 2],
@@ -2556,7 +2579,18 @@ namespace TimeIntegrationSchemes
                                   d_vec_im[my_block * 2],
                                   this->time_step);
 
+          if(false)
+          {
+          SolverGCR<LinearAlgebra::distributed::BlockVector<double>> solver(
+            solver_control);
           solver.solve(op_complex, dst_block, src_block, presb);
+          }
+          else
+          {
+          SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>> solver(
+            solver_control);
+          solver.solve(op_complex, dst_block, src_block, presb);
+          }
 
           const auto n_iterations_presb = presb.get_n_iterations_and_clear();
 

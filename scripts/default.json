@@ -3,7 +3,7 @@
     "NRefinements" : 8,
     "TimeIntegrationScheme" : "spirk", 
     "IRKStages" : "4",
-    "OuterTolerance" : "1e-8",
+    "OuterTolerance" : "1e-12",
     "InnerTolerance" : "0.0",
     "TimeStepSize" : "0.1",
     "EndTime" : "1.0",

@@ -18,7 +18,7 @@
 #SBATCH --account=pr83te
 #
 ## #SBATCH --switches=4@24:00:00
-#SBATCH --partition=test
+#SBATCH --partition=micro
 #Number of nodes and MPI tasks per node:
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=48
