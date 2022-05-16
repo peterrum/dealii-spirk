@@ -724,6 +724,9 @@ namespace TimeIntegrationSchemes
       time_system_vmult          = 0.0;
       time_preconditioner_bc     = 0.0;
       time_preconditioner_solver = 0.0;
+
+      n_outer_iterations = 0;
+      n_inner_iterations = 0;
     }
 
     const MPI_Comm     comm;
@@ -1796,6 +1799,9 @@ namespace TimeIntegrationSchemes
       time_system_vmult          = 0.0;
       time_preconditioner_bc     = 0.0;
       time_preconditioner_solver = 0.0;
+
+      n_outer_iterations = 0;
+      n_inner_iterations = 0;
     }
 
     const MPI_Comm                                    comm;
