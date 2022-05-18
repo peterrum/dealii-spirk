@@ -3014,6 +3014,13 @@ namespace HeatEquation
 
           if (params.time_integration_scheme == "irk_batched")
             {
+              for (unsigned int l = min_level; l <= max_level; ++l)
+                mg_batched_operators[l] = std::make_shared<
+                  BatchedMassLaplaceOperatorMatrixFree<dim, double>>(
+                  dynamic_cast<const MassLaplaceOperatorMatrixFree<dim, double>
+                                 *>(mg_operators[l].get())
+                    ->get_matrix_free());
+
               preconditioner_batch =
                 std::make_unique<PreconditionerGMG<dim,
                                                    BatchedMassLaplaceOperator,
@@ -3026,6 +3033,13 @@ namespace HeatEquation
             }
           else if (params.time_integration_scheme == "complex_irk_batched")
             {
+              for (unsigned int l = min_level; l <= max_level; ++l)
+                mg_complex_operators[l] = std::make_shared<
+                  ComplexMassLaplaceOperatorMatrixFree<dim, double>>(
+                  dynamic_cast<const MassLaplaceOperatorMatrixFree<dim, double>
+                                 *>(mg_operators[l].get())
+                    ->get_matrix_free());
+
               preconditioner_batch =
                 std::make_unique<PreconditionerGMG<dim,
                                                    ComplexMassLaplaceOperator,
