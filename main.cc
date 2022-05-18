@@ -2966,6 +2966,8 @@ namespace HeatEquation
             mg_constraints(min_level, max_level);
           MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
             mg_operators(min_level, max_level);
+          MGLevelObject<std::shared_ptr<const BatchedMassLaplaceOperator>>
+            mg_batched_operators(min_level, max_level);
           MGLevelObject<std::shared_ptr<const ComplexMassLaplaceOperator>>
             mg_complex_operators(min_level, max_level);
 
@@ -3012,11 +3014,18 @@ namespace HeatEquation
 
           if (params.time_integration_scheme == "irk_batched")
             {
-              AssertThrow(false, ExcNotImplemented());
+              preconditioner_batch =
+                std::make_unique<PreconditionerGMG<dim,
+                                                   BatchedMassLaplaceOperator,
+                                                   BlockVectorType,
+                                                   VectorType>>(
+                  this->dof_handler,
+                  mg_dof_handlers,
+                  mg_constraints,
+                  mg_batched_operators);
             }
           else if (params.time_integration_scheme == "complex_irk_batched")
             {
-              AssertThrow(false, ExcNotImplemented());
               preconditioner_batch =
                 std::make_unique<PreconditionerGMG<dim,
                                                    ComplexMassLaplaceOperator,

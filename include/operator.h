@@ -635,3 +635,98 @@ private:
 
   mutable SparseMatrixType system_matrix;
 };
+
+
+class BatchedMassLaplaceOperator : public Subscriptor
+{
+public:
+  using Number = typename VectorType::value_type;
+
+  virtual ~BatchedMassLaplaceOperator() = default;
+
+  virtual void
+  initialize_dof_vector(VectorType &vec) const = 0;
+
+  virtual void
+  initialize_dof_vector(BlockVectorType &vec) const = 0;
+
+  virtual void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+  virtual void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const = 0;
+
+  types::global_dof_index
+  m() const
+  {
+    AssertThrow(false, ExcNotImplemented());
+
+    return 0;
+  }
+
+  Number
+  el(unsigned int, unsigned int) const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    return 0.0;
+  }
+
+protected:
+};
+
+template <int dim, typename Number>
+class BatchedMassLaplaceOperatorMatrixFree : public BatchedMassLaplaceOperator
+{
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+public:
+  BatchedMassLaplaceOperatorMatrixFree(
+    const MatrixFree<dim, Number> &matrix_free)
+    : BatchedMassLaplaceOperator()
+    , matrix_free(matrix_free)
+  {}
+
+  virtual ~BatchedMassLaplaceOperatorMatrixFree() = default;
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const override
+  {
+    Assert(false, ExcNotImplemented());
+    (void)diagonal;
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
+  void
+  initialize_dof_vector(BlockVectorType &vec) const override
+  {
+    Assert(false, ExcNotImplemented());
+    (void)vec;
+  }
+
+  void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    Assert(false, ExcNotImplemented());
+    (void)dst;
+    (void)src;
+  }
+
+  void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)dst;
+    (void)src;
+  }
+
+private:
+  const MatrixFree<dim, Number> &matrix_free;
+};
