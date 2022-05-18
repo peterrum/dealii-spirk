@@ -642,7 +642,17 @@ class BatchedMassLaplaceOperator : public Subscriptor
 public:
   using Number = typename VectorType::value_type;
 
+  BatchedMassLaplaceOperator(const Vector<double> d_vec)
+    : d_vec(d_vec)
+  {}
+
   virtual ~BatchedMassLaplaceOperator() = default;
+
+  void
+  reinit(const double tau) const
+  {
+    this->tau = tau;
+  }
 
   virtual void
   initialize_dof_vector(VectorType &vec) const = 0;
@@ -676,7 +686,7 @@ public:
 
 protected:
 protected:
-  double               tau;
+  mutable double       tau;
   const Vector<double> d_vec;
 };
 
@@ -687,8 +697,9 @@ class BatchedMassLaplaceOperatorMatrixFree : public BatchedMassLaplaceOperator
 
 public:
   BatchedMassLaplaceOperatorMatrixFree(
+    const Vector<double>           d_vec,
     const MatrixFree<dim, Number> &matrix_free)
-    : BatchedMassLaplaceOperator()
+    : BatchedMassLaplaceOperator(d_vec)
     , matrix_free(matrix_free)
   {}
 

@@ -773,6 +773,8 @@ namespace TimeIntegrationSchemes
         const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
         const PreconditionerBase<VectorType> &block_preconditioner,
+        const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+          &batch_preconditioner,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
       : IRKBase(comm,
@@ -781,6 +783,7 @@ namespace TimeIntegrationSchemes
                 op,
                 block_preconditioner,
                 evaluate_rhs_function)
+      , batch_preconditioner(batch_preconditioner)
       , n_max_iterations(1000)
       , outer_tolerance(outer_tolerance)
       , inner_tolerance(inner_tolerance)
@@ -836,6 +839,7 @@ namespace TimeIntegrationSchemes
                                              time_step,
                                              op,
                                              block_preconditioner,
+                                             batch_preconditioner,
                                              time_preconditioner_bc,
                                              time_preconditioner_solver,
                                              times_preconditioner_solver);
@@ -1036,16 +1040,19 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
-                     const FullMatrix<typename VectorType::value_type> &T,
-                     const FullMatrix<typename VectorType::value_type> &T_inv,
-                     const double                          inner_tolerance,
-                     const double                          time_step,
-                     const MassLaplaceOperator &           op,
-                     const PreconditionerBase<VectorType> &preconditioner,
-                     double &                              time_bc,
-                     double &                              time_solver,
-                     std::vector<double> &                 times_solver)
+      Preconditioner(
+        const Vector<typename VectorType::value_type> &    d_vec,
+        const FullMatrix<typename VectorType::value_type> &T,
+        const FullMatrix<typename VectorType::value_type> &T_inv,
+        const double                                       inner_tolerance,
+        const double                                       time_step,
+        const MassLaplaceOperator &                        op,
+        const PreconditionerBase<VectorType> &             preconditioner,
+        const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+          &                  batch_preconditioner,
+        double &             time_bc,
+        double &             time_solver,
+        std::vector<double> &times_solver)
         : n_max_iterations(100)
         , inner_tolerance(inner_tolerance)
         , cut_off_tolerance(1e-12)
@@ -1055,18 +1062,26 @@ namespace TimeIntegrationSchemes
         , T_mat_inv(T_inv)
         , tau(time_step)
         , op(op)
+        , batch_preconditioner(batch_preconditioner)
         , time_bc(time_bc)
         , time_solver(time_solver)
         , times_solver(times_solver)
       {
-        preconditioners.resize(n_stages);
-
-        for (unsigned int i = 0; i < n_stages; ++i)
+        if (batch_preconditioner)
           {
-            op.reinit(d_vec[i], tau);
+            batch_preconditioner->reinit();
+          }
+        else
+          {
+            preconditioners.resize(n_stages);
 
-            preconditioners[i] = preconditioner.clone();
-            preconditioners[i]->reinit();
+            for (unsigned int i = 0; i < n_stages; ++i)
+              {
+                op.reinit(d_vec[i], tau);
+
+                preconditioners[i] = preconditioner.clone();
+                preconditioners[i]->reinit();
+              }
           }
 
         n_iterations.assign(n_stages, 0);
@@ -1092,7 +1107,7 @@ namespace TimeIntegrationSchemes
         BlockVectorType tmp_vectors; // TODO
         tmp_vectors.reinit(src);     //
 
-        if ("irk_batched")
+        if (batch_preconditioner)
           {
             batch_preconditioner->vmult(tmp_vectors, dst);
           }
@@ -1172,11 +1187,11 @@ namespace TimeIntegrationSchemes
       const double tau;
 
       const MassLaplaceOperator &op;
+      const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+        &batch_preconditioner;
+
       std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
         preconditioners;
-
-      std::shared_ptr<const PreconditionerBase<BlockVectorType>>
-        batch_preconditioner;
 
       double &             time_bc;
       double &             time_solver;
@@ -1184,6 +1199,9 @@ namespace TimeIntegrationSchemes
 
       mutable std::vector<unsigned int> n_iterations;
     };
+
+    const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+      &batch_preconditioner;
 
     const unsigned int n_max_iterations;
     const double       outer_tolerance;
@@ -2844,11 +2862,12 @@ namespace HeatEquation
       dealii::ParameterHandler prm;
       prm.add_parameter("FEDegree", fe_degree);
       prm.add_parameter("NRefinements", n_refinements);
-      prm.add_parameter("TimeIntegrationScheme",
-                        time_integration_scheme,
-                        "",
-                        Patterns::Selection(
-                          "ost|irk|spirk|complex_irk|complex_spirk"));
+      prm.add_parameter(
+        "TimeIntegrationScheme",
+        time_integration_scheme,
+        "",
+        Patterns::Selection(
+          "ost|irk|irk_batched|spirk|complex_irk|complex_spirk"));
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
@@ -2940,9 +2959,11 @@ namespace HeatEquation
 
       // select preconditioner
       std::unique_ptr<PreconditionerBase<VectorType>>      preconditioner;
-      std::unique_ptr<PreconditionerBase<BlockVectorType>> preconditioner_batch;
+      std::shared_ptr<PreconditionerBase<BlockVectorType>> preconditioner_batch;
 
       std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
+
+      std::function<void(const double)> mg_batched_operators_set_time_callback;
 
       if (params.block_preconditioner_type == "AMG")
         {
@@ -3017,12 +3038,14 @@ namespace HeatEquation
               for (unsigned int l = min_level; l <= max_level; ++l)
                 mg_batched_operators[l] = std::make_shared<
                   BatchedMassLaplaceOperatorMatrixFree<dim, double>>(
+                  TimeIntegrationSchemes::load_vector_from_file(
+                    params.irk_stages, "D_vec_"),
                   dynamic_cast<const MassLaplaceOperatorMatrixFree<dim, double>
                                  *>(mg_operators[l].get())
                     ->get_matrix_free());
 
               preconditioner_batch =
-                std::make_unique<PreconditionerGMG<dim,
+                std::make_shared<PreconditionerGMG<dim,
                                                    BatchedMassLaplaceOperator,
                                                    BlockVectorType,
                                                    VectorType>>(
@@ -3030,6 +3053,14 @@ namespace HeatEquation
                   mg_dof_handlers,
                   mg_constraints,
                   mg_batched_operators);
+
+              mg_batched_operators_set_time_callback =
+                [mg_batched_operators](const double tau) {
+                  for (unsigned int l = mg_batched_operators.min_level();
+                       l <= mg_batched_operators.max_level();
+                       ++l)
+                    mg_batched_operators[l]->reinit(tau);
+                };
             }
           else if (params.time_integration_scheme == "complex_irk_batched")
             {
@@ -3046,7 +3077,7 @@ namespace HeatEquation
                 }
 
               preconditioner_batch =
-                std::make_unique<PreconditionerGMG<dim,
+                std::make_shared<PreconditionerGMG<dim,
                                                    ComplexMassLaplaceOperator,
                                                    BlockVectorType,
                                                    VectorType>>(
@@ -3088,6 +3119,7 @@ namespace HeatEquation
           params.do_reduce_number_of_vmults,
           *mass_laplace_operator,
           *preconditioner,
+          preconditioner_batch,
           evaluate_rhs_function);
       else if (params.time_integration_scheme == "spirk")
         time_integration_scheme =
@@ -3187,6 +3219,9 @@ namespace HeatEquation
                 << std::endl;
 
           ++timestep_number;
+
+          if (mg_batched_operators_set_time_callback)
+            mg_batched_operators_set_time_callback(time_step_size_truncated);
 
           time_integration_scheme->solve(solution,
                                          timestep_number,

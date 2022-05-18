@@ -277,6 +277,9 @@ public:
         });
 
     // TODO: transfer_block
+    transfer_block =
+      std::make_unique<MGTransferBlockGlobalCoarsening<dim, VectorTypeScalar>>(
+        *transfer_scalar);
 
     this->sub_comm = create_sub_comm(*mg_dof_handlers[min_level]);
   }
@@ -396,7 +399,7 @@ public:
       }
     else
       {
-        Assert(false, ExcNotImplemented());
+        AssertThrow(false, ExcNotImplemented());
       }
 
     // create multigrid algorithm (put level operators, smoothers, transfer
@@ -418,13 +421,25 @@ public:
       }
     else
       {
-        AssertThrow(false, ExcNotImplemented());
+        mg = std::make_unique<Multigrid<VectorType>>(*mg_matrix,
+                                                     *mg_coarse,
+                                                     *transfer_block,
+                                                     mg_smoother,
+                                                     mg_smoother,
+                                                     min_level,
+                                                     max_level);
+
+        // convert multigrid algorithm to preconditioner
+        preconditioner =
+          std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
+            dof_handler, *mg, *transfer_block);
       }
   }
 
   virtual void
   vmult(VectorType &dst, const VectorType &src) const override
   {
+    Assert(preconditioner, ExcInternalError());
     preconditioner->vmult(dst, src);
   }
 
@@ -456,8 +471,9 @@ private:
 
   MGLevelObject<MGTwoLevelTransfer<dim, VectorTypeScalar>> transfers;
   std::unique_ptr<MGTransferGlobalCoarsening<dim, VectorTypeScalar>>
-                                  transfer_scalar;
-  std::unique_ptr<MGTransferType> transfer;
+    transfer_scalar;
+  std::unique_ptr<MGTransferBlockGlobalCoarsening<dim, VectorTypeScalar>>
+    transfer_block;
 
   mutable std::unique_ptr<mg::Matrix<VectorType>> mg_matrix;
 
