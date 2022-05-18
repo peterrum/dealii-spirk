@@ -675,6 +675,9 @@ public:
   }
 
 protected:
+protected:
+  double               tau;
+  const Vector<double> d_vec;
 };
 
 template <int dim, typename Number>
@@ -694,8 +697,20 @@ public:
   virtual void
   compute_inverse_diagonal(BlockVectorType &diagonal) const override
   {
-    Assert(false, ExcNotImplemented());
-    (void)diagonal;
+    this->initialize_dof_vector(diagonal);
+
+    for (unsigned int b = 0; b < this->d_vec.size(); ++b)
+      {
+        this->current_block = b;
+
+        MatrixFreeTools::compute_diagonal(
+          matrix_free,
+          diagonal.block(b),
+          &BatchedMassLaplaceOperatorMatrixFree::do_cell_integral,
+          this);
+        for (auto &i : diagonal.block(b))
+          i = (std::abs(i) > 1.0e-10) ? (1.0 / i) : 1.0;
+      }
   }
 
   void
@@ -707,16 +722,21 @@ public:
   void
   initialize_dof_vector(BlockVectorType &vec) const override
   {
-    Assert(false, ExcNotImplemented());
-    (void)vec;
+    vec.reinit(this->d_vec.size());
+
+    for (unsigned int i = 0; i < this->d_vec.size(); ++i)
+      matrix_free.initialize_dof_vector(vec.block(i));
   }
 
   void
   vmult(BlockVectorType &dst, const BlockVectorType &src) const override
   {
-    Assert(false, ExcNotImplemented());
-    (void)dst;
-    (void)src;
+    this->matrix_free.cell_loop(
+      &BatchedMassLaplaceOperatorMatrixFree::do_cell_integral_range,
+      this,
+      dst,
+      src,
+      true);
   }
 
   void
@@ -729,4 +749,46 @@ public:
 
 private:
   const MatrixFree<dim, Number> &matrix_free;
+  mutable unsigned int           current_block;
+
+  void
+  do_cell_integral_range(
+    const MatrixFree<dim, Number> &              matrix_free,
+    BlockVectorType &                            dst,
+    const BlockVectorType &                      src,
+    const std::pair<unsigned int, unsigned int> &range) const
+  {
+    FECellIntegrator integrator(matrix_free, range);
+    for (unsigned cell = range.first; cell < range.second; ++cell)
+      {
+        integrator.reinit(cell);
+
+        for (unsigned int b = 0; b < this->d_vec.size(); ++b)
+          {
+            this->current_block = b;
+
+            integrator.read_dof_values(src.block(b));
+
+            do_cell_integral(integrator);
+
+            integrator.distribute_local_to_global(dst.block(b));
+          }
+      }
+  }
+
+  void
+  do_cell_integral(FECellIntegrator &integrator) const
+  {
+    integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        integrator.submit_value(this->d_vec[current_block] *
+                                  integrator.get_value(q),
+                                q);
+        integrator.submit_gradient(tau * integrator.get_gradient(q), q);
+      }
+
+    integrator.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+  }
 };
