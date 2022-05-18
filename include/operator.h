@@ -262,11 +262,11 @@ public:
     matrix_free.reinit(
       MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
   }
-  
+
   const MatrixFree<dim, Number> &
   get_matrix_free() const
   {
-      return matrix_free;
+    return matrix_free;
   }
 
   types::global_dof_index
@@ -458,8 +458,11 @@ public:
     , lambda_im(1.0)
     , tau(1.0)
   {}
-  
+
   virtual ~ComplexMassLaplaceOperator() = default;
+
+  virtual void
+  initialize_dof_vector(VectorType &vec) const = 0;
 
   virtual void
   initialize_dof_vector(BlockVectorType &vec) const = 0;
@@ -478,6 +481,27 @@ public:
   virtual void
   vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
 
+  virtual void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const = 0;
+
+  types::global_dof_index
+  m() const
+  {
+    AssertThrow(false, ExcNotImplemented());
+
+    return 0;
+  }
+
+  Number
+  el(unsigned int, unsigned int) const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    return 0.0;
+  }
+
 protected:
   mutable double lambda_re;
   mutable double lambda_im;
@@ -490,11 +514,12 @@ class ComplexMassLaplaceOperatorMatrixFree : public ComplexMassLaplaceOperator
   using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
 
 public:
-  ComplexMassLaplaceOperatorMatrixFree(const MatrixFree<dim, Number> & matrix_free)
-  : ComplexMassLaplaceOperator(), matrix_free(matrix_free)
-  {
-  }
-  
+  ComplexMassLaplaceOperatorMatrixFree(
+    const MatrixFree<dim, Number> &matrix_free)
+    : ComplexMassLaplaceOperator()
+    , matrix_free(matrix_free)
+  {}
+
   virtual ~ComplexMassLaplaceOperatorMatrixFree() = default;
 
   void
@@ -503,12 +528,25 @@ public:
     this->scalar_operator = &scalar_operator;
   }
 
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const override
+  {
+    Assert(false, ExcNotImplemented());
+    (void)diagonal;
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
   void
   initialize_dof_vector(BlockVectorType &vec) const override
   {
-      vec.reinit(2);
-      matrix_free.initialize_dof_vector(vec.block(0));
-      matrix_free.initialize_dof_vector(vec.block(1));
+    vec.reinit(2);
+    matrix_free.initialize_dof_vector(vec.block(0));
+    matrix_free.initialize_dof_vector(vec.block(1));
   }
 
   void
@@ -582,8 +620,16 @@ public:
       }
   }
 
+  void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)dst;
+    (void)src;
+  }
+
 private:
-  const MatrixFree<dim, Number> & matrix_free;
+  const MatrixFree<dim, Number> &matrix_free;
 
   const MassLaplaceOperator *scalar_operator = nullptr;
 

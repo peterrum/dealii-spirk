@@ -2939,7 +2939,8 @@ namespace HeatEquation
         }
 
       // select preconditioner
-      std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
+      std::unique_ptr<PreconditionerBase<VectorType>>      preconditioner;
+      std::unique_ptr<PreconditionerBase<BlockVectorType>> preconditioner_batch;
 
       std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
 
@@ -3016,10 +3017,15 @@ namespace HeatEquation
           else if (params.time_integration_scheme == "complex_irk_batched")
             {
               AssertThrow(false, ExcNotImplemented());
-              // preconditioner = std::make_unique<
-              //  PreconditionerGMG<dim, ComplexMassLaplaceOperator,
-              //  VectorType>>( this->dof_handler, mg_dof_handlers,
-              //  mg_constraints, mg_complex_operators);
+              preconditioner_batch =
+                std::make_unique<PreconditionerGMG<dim,
+                                                   ComplexMassLaplaceOperator,
+                                                   BlockVectorType,
+                                                   VectorType>>(
+                  this->dof_handler,
+                  mg_dof_handlers,
+                  mg_constraints,
+                  mg_complex_operators);
             }
         }
       else

@@ -233,10 +233,19 @@ struct PreconditionerGMGAdditionalData
 
 
 
-template <int dim, typename LevelMatrixType, typename VectorType>
+template <int dim,
+          typename LevelMatrixType,
+          typename VectorType,
+          typename VectorTypeScalar = VectorType>
 class PreconditionerGMG : public PreconditionerBase<VectorType>
 {
-  using MGTransferType = MGTransferGlobalCoarsening<dim, VectorType>;
+  static const bool working_on_block_vector =
+    internal::is_block_vector<VectorType>;
+
+  using MGTransferType = typename std::conditional<
+    working_on_block_vector,
+    MGTransferBlockGlobalCoarsening<dim, VectorTypeScalar>,
+    MGTransferGlobalCoarsening<dim, VectorTypeScalar>>::type;
 
 public:
   PreconditionerGMG(
@@ -261,10 +270,13 @@ public:
                               *mg_constraints[l + 1],
                               *mg_constraints[l]);
 
-    transfer =
-      std::make_unique<MGTransferType>(transfers, [&](const auto l, auto &vec) {
-        this->mg_operators[l]->initialize_dof_vector(vec);
-      });
+    transfer_scalar =
+      std::make_unique<MGTransferGlobalCoarsening<dim, VectorTypeScalar>>(
+        transfers, [&](const auto l, auto &vec) {
+          this->mg_operators[l]->initialize_dof_vector(vec);
+        });
+
+    // TODO: transfer_block
 
     this->sub_comm = create_sub_comm(*mg_dof_handlers[min_level]);
   }
@@ -350,49 +362,64 @@ public:
 
     mg_smoother.initialize(mg_operators, smoother_data);
 
-    // setup coarse-grid solver
-    const auto coarse_comm =
-      mg_operators[min_level]->supports_sub_communicator() ?
-        *sub_comm :
-        mg_dof_handlers[min_level]->get_communicator();
-    if (coarse_comm != MPI_COMM_NULL)
+    if constexpr (working_on_block_vector == false)
       {
-        precondition_amg =
-          std::make_unique<TrilinosWrappers::PreconditionAMG>();
+        // setup coarse-grid solver
+        const auto coarse_comm =
+          mg_operators[min_level]->supports_sub_communicator() ?
+            *sub_comm :
+            mg_dof_handlers[min_level]->get_communicator();
+        if (coarse_comm != MPI_COMM_NULL)
+          {
+            precondition_amg =
+              std::make_unique<TrilinosWrappers::PreconditionAMG>();
 
-        TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-        amg_data.smoother_sweeps = additional_data.coarse_grid_smoother_sweeps;
-        amg_data.n_cycles        = additional_data.coarse_grid_n_cycles;
-        amg_data.smoother_type =
-          additional_data.coarse_grid_smoother_type.c_str();
-        precondition_amg->initialize(
-          mg_operators[min_level]->get_system_matrix(coarse_comm), amg_data);
-        mg_coarse = std::make_unique<
-          MGCoarseGridApplyPreconditioner<VectorType,
-                                          TrilinosWrappers::PreconditionAMG>>(
-          *precondition_amg);
+            TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+            amg_data.smoother_sweeps =
+              additional_data.coarse_grid_smoother_sweeps;
+            amg_data.n_cycles = additional_data.coarse_grid_n_cycles;
+            amg_data.smoother_type =
+              additional_data.coarse_grid_smoother_type.c_str();
+            precondition_amg->initialize(
+              mg_operators[min_level]->get_system_matrix(coarse_comm),
+              amg_data);
+            mg_coarse = std::make_unique<MGCoarseGridApplyPreconditioner<
+              VectorType,
+              TrilinosWrappers::PreconditionAMG>>(*precondition_amg);
+          }
+        else
+          {
+            mg_coarse = std::make_unique<MGCoarseGridApplyPreconditioner<
+              VectorType,
+              TrilinosWrappers::PreconditionAMG>>();
+          }
       }
     else
       {
-        mg_coarse = std::make_unique<
-          MGCoarseGridApplyPreconditioner<VectorType,
-                                          TrilinosWrappers::PreconditionAMG>>();
+        Assert(false, ExcNotImplemented());
       }
 
     // create multigrid algorithm (put level operators, smoothers, transfer
     // operators and smoothers together)
-    mg = std::make_unique<Multigrid<VectorType>>(*mg_matrix,
-                                                 *mg_coarse,
-                                                 *transfer,
-                                                 mg_smoother,
-                                                 mg_smoother,
-                                                 min_level,
-                                                 max_level);
+    if constexpr (working_on_block_vector == false)
+      {
+        mg = std::make_unique<Multigrid<VectorType>>(*mg_matrix,
+                                                     *mg_coarse,
+                                                     *transfer_scalar,
+                                                     mg_smoother,
+                                                     mg_smoother,
+                                                     min_level,
+                                                     max_level);
 
-    // convert multigrid algorithm to preconditioner
-    preconditioner =
-      std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
-        dof_handler, *mg, *transfer);
+        // convert multigrid algorithm to preconditioner
+        preconditioner =
+          std::make_unique<PreconditionMG<dim, VectorType, MGTransferType>>(
+            dof_handler, *mg, *transfer_scalar);
+      }
+    else
+      {
+        AssertThrow(false, ExcNotImplemented());
+      }
   }
 
   virtual void
@@ -405,10 +432,8 @@ public:
   clone() const override
   {
     return std::make_unique<
-      PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(dof_handler,
-                                                               mg_dof_handlers,
-                                                               mg_constraints,
-                                                               mg_operators);
+      PreconditionerGMG<dim, LevelMatrixType, VectorType, VectorTypeScalar>>(
+      dof_handler, mg_dof_handlers, mg_constraints, mg_operators);
   }
 
 private:
@@ -429,8 +454,10 @@ private:
   const unsigned int min_level;
   const unsigned int max_level;
 
-  MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
-  std::unique_ptr<MGTransferType>                    transfer;
+  MGLevelObject<MGTwoLevelTransfer<dim, VectorTypeScalar>> transfers;
+  std::unique_ptr<MGTransferGlobalCoarsening<dim, VectorTypeScalar>>
+                                  transfer_scalar;
+  std::unique_ptr<MGTransferType> transfer;
 
   mutable std::unique_ptr<mg::Matrix<VectorType>> mg_matrix;
 
