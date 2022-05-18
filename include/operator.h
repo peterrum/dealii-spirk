@@ -669,13 +669,8 @@ public:
   virtual void
   compute_inverse_diagonal(BlockVectorType &diagonal) const = 0;
 
-  types::global_dof_index
-  m() const
-  {
-    AssertThrow(false, ExcNotImplemented());
-
-    return 0;
-  }
+  virtual types::global_dof_index
+  m() const = 0;
 
   Number
   el(unsigned int, unsigned int) const
@@ -704,6 +699,12 @@ public:
   {}
 
   virtual ~BatchedMassLaplaceOperatorMatrixFree() = default;
+
+  types::global_dof_index
+  m() const override
+  {
+    return matrix_free.get_dof_handler().n_dofs() * this->d_vec.size();
+  }
 
   virtual void
   compute_inverse_diagonal(BlockVectorType &diagonal) const override
@@ -737,6 +738,8 @@ public:
 
     for (unsigned int i = 0; i < this->d_vec.size(); ++i)
       matrix_free.initialize_dof_vector(vec.block(i));
+
+    vec.collect_sizes();
   }
 
   void

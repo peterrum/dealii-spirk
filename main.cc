@@ -773,7 +773,7 @@ namespace TimeIntegrationSchemes
         const bool                            do_reduce_number_of_vmults,
         const MassLaplaceOperator &           op,
         const PreconditionerBase<VectorType> &block_preconditioner,
-        const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+        const std::shared_ptr<PreconditionerBase<BlockVectorType>>
           &batch_preconditioner,
         const std::function<void(const double, VectorType &)>
           &evaluate_rhs_function)
@@ -1040,19 +1040,18 @@ namespace TimeIntegrationSchemes
     class Preconditioner
     {
     public:
-      Preconditioner(
-        const Vector<typename VectorType::value_type> &    d_vec,
-        const FullMatrix<typename VectorType::value_type> &T,
-        const FullMatrix<typename VectorType::value_type> &T_inv,
-        const double                                       inner_tolerance,
-        const double                                       time_step,
-        const MassLaplaceOperator &                        op,
-        const PreconditionerBase<VectorType> &             preconditioner,
-        const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
-          &                  batch_preconditioner,
-        double &             time_bc,
-        double &             time_solver,
-        std::vector<double> &times_solver)
+      Preconditioner(const Vector<typename VectorType::value_type> &    d_vec,
+                     const FullMatrix<typename VectorType::value_type> &T,
+                     const FullMatrix<typename VectorType::value_type> &T_inv,
+                     const double                          inner_tolerance,
+                     const double                          time_step,
+                     const MassLaplaceOperator &           op,
+                     const PreconditionerBase<VectorType> &preconditioner,
+                     const std::shared_ptr<PreconditionerBase<BlockVectorType>>
+                       &                  batch_preconditioner,
+                     double &             time_bc,
+                     double &             time_solver,
+                     std::vector<double> &times_solver)
         : n_max_iterations(100)
         , inner_tolerance(inner_tolerance)
         , cut_off_tolerance(1e-12)
@@ -1187,7 +1186,7 @@ namespace TimeIntegrationSchemes
       const double tau;
 
       const MassLaplaceOperator &op;
-      const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+      const std::shared_ptr<PreconditionerBase<BlockVectorType>>
         &batch_preconditioner;
 
       std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
@@ -1200,7 +1199,7 @@ namespace TimeIntegrationSchemes
       mutable std::vector<unsigned int> n_iterations;
     };
 
-    const std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+    const std::shared_ptr<PreconditionerBase<BlockVectorType>>
       &batch_preconditioner;
 
     const unsigned int n_max_iterations;
