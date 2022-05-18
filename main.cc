@@ -908,7 +908,7 @@ namespace TimeIntegrationSchemes
             {
               solver_name = "FGMRES";
 
-              SolverFGMRES<BlockVectorType> cg(solver_control);
+              SolverGMRES<BlockVectorType> cg(solver_control);
               cg.solve(*system_matrix,
                        system_solution,
                        system_rhs,
@@ -1341,7 +1341,7 @@ namespace TimeIntegrationSchemes
             {
               solver_name = "FGMRES";
 
-              SolverFGMRES<ReshapedVectorType> cg(solver_control);
+              SolverGMRES<ReshapedVectorType> cg(solver_control);
               cg.solve(*system_matrix,
                        system_solution,
                        system_rhs,
@@ -2100,7 +2100,7 @@ namespace TimeIntegrationSchemes
               }
             else
               {
-                SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
+                SolverGMRES<LinearAlgebra::distributed::BlockVector<double>>
                   solver(solver_control);
                 solver.solve(op_complex, dst_block[i], src_block[i], presb);
               }
@@ -2599,7 +2599,7 @@ namespace TimeIntegrationSchemes
             }
           else
             {
-              SolverFGMRES<LinearAlgebra::distributed::BlockVector<double>>
+              SolverGMRES<LinearAlgebra::distributed::BlockVector<double>>
                 solver(solver_control);
               solver.solve(op_complex, dst_block, src_block, presb);
             }
