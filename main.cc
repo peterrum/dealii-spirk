@@ -1092,37 +1092,45 @@ namespace TimeIntegrationSchemes
         BlockVectorType tmp_vectors; // TODO
         tmp_vectors.reinit(src);     //
 
-        for (unsigned int i = 0; i < n_stages; ++i)
+        if ("irk_batched")
           {
-            const auto time_block = std::chrono::system_clock::now();
-
-            if (inner_tolerance > 0.0)
+            batch_preconditioner->vmult(tmp_vectors, dst);
+          }
+        else
+          {
+            for (unsigned int i = 0; i < n_stages; ++i)
               {
-                ReductionControl     solver_control(n_max_iterations,
-                                                1e-10,
-                                                inner_tolerance);
-                SolverCG<VectorType> solver(solver_control);
+                const auto time_block = std::chrono::system_clock::now();
 
-                op.reinit(d_vec[i], tau);
+                if (inner_tolerance > 0.0)
+                  {
+                    ReductionControl     solver_control(n_max_iterations,
+                                                    1e-10,
+                                                    inner_tolerance);
+                    SolverCG<VectorType> solver(solver_control);
 
-                solver.solve(op,
-                             tmp_vectors.block(i),
-                             dst.block(i),
-                             *preconditioners[i]);
+                    op.reinit(d_vec[i], tau);
 
-                n_iterations[i] += solver_control.last_step();
+                    solver.solve(op,
+                                 tmp_vectors.block(i),
+                                 dst.block(i),
+                                 *preconditioners[i]);
+
+                    n_iterations[i] += solver_control.last_step();
+                  }
+                else
+                  {
+                    op.reinit(d_vec[i], tau);
+                    preconditioners[i]->vmult(tmp_vectors.block(i),
+                                              dst.block(i));
+                    n_iterations[i] += 1;
+                  }
+
+                times_solver[i] +=
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::system_clock::now() - time_block)
+                    .count();
               }
-            else
-              {
-                op.reinit(d_vec[i], tau);
-                preconditioners[i]->vmult(tmp_vectors.block(i), dst.block(i));
-                n_iterations[i] += 1;
-              }
-
-            times_solver[i] +=
-              std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::system_clock::now() - time_block)
-                .count();
           }
 
         this->time_solver +=
@@ -1166,6 +1174,9 @@ namespace TimeIntegrationSchemes
       const MassLaplaceOperator &op;
       std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
         preconditioners;
+
+      std::shared_ptr<const PreconditionerBase<BlockVectorType>>
+        batch_preconditioner;
 
       double &             time_bc;
       double &             time_solver;
@@ -2983,7 +2994,8 @@ namespace HeatEquation
             *mass_laplace_operator,
             *preconditioner,
             evaluate_rhs_function);
-      else if (params.time_integration_scheme == "irk")
+      else if (params.time_integration_scheme == "irk" |
+               params.time_integration_scheme == "irk_batched")
         time_integration_scheme = std::make_unique<TimeIntegrationSchemes::IRK>(
           comm_global,
           params.outer_tolerance,
