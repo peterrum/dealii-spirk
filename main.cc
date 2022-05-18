@@ -2096,31 +2096,51 @@ namespace TimeIntegrationSchemes
                               d_vec_im[i * 2],
                               this->time_step);
 
-            PreconditionPRESB presb(op,
-                                    *preconditioners[i],
-                                    inner_tolerance,
-                                    d_vec_re[i * 2],
-                                    d_vec_im[i * 2],
-                                    this->time_step);
-
-            if (false)
-              {
-                SolverGCR<LinearAlgebra::distributed::BlockVector<double>>
-                  solver(solver_control);
-                solver.solve(op_complex, dst_block[i], src_block[i], presb);
-              }
-            else
+            if ("complex_irk_batched")
               {
                 SolverGMRES<LinearAlgebra::distributed::BlockVector<double>>
                   solver(solver_control);
-                solver.solve(op_complex, dst_block[i], src_block[i], presb);
+                solver.solve(op_complex,
+                             dst_block[i],
+                             src_block[i],
+                             *batched_precon[i]);
+
+                std::get<0>(this->n_iterations[i]) +=
+                  solver_control.last_step();
+                std::get<1>(this->n_iterations[i]) +=
+                  solver_control.last_step() + 1;
+                std::get<2>(this->n_iterations[i]) += 0;
               }
+            else
+              {
+                PreconditionPRESB presb(op,
+                                        *preconditioners[i],
+                                        inner_tolerance,
+                                        d_vec_re[i * 2],
+                                        d_vec_im[i * 2],
+                                        this->time_step);
 
-            const auto n_iterations_presb = presb.get_n_iterations_and_clear();
+                if (false)
+                  {
+                    SolverGCR<LinearAlgebra::distributed::BlockVector<double>>
+                      solver(solver_control);
+                    solver.solve(op_complex, dst_block[i], src_block[i], presb);
+                  }
+                else
+                  {
+                    SolverGMRES<LinearAlgebra::distributed::BlockVector<double>>
+                      solver(solver_control);
+                    solver.solve(op_complex, dst_block[i], src_block[i], presb);
+                  }
 
-            std::get<0>(this->n_iterations[i]) += solver_control.last_step();
-            std::get<1>(this->n_iterations[i]) += n_iterations_presb.first;
-            std::get<2>(this->n_iterations[i]) += n_iterations_presb.second;
+                const auto n_iterations_presb =
+                  presb.get_n_iterations_and_clear();
+
+                std::get<0>(this->n_iterations[i]) +=
+                  solver_control.last_step();
+                std::get<1>(this->n_iterations[i]) += n_iterations_presb.first;
+                std::get<2>(this->n_iterations[i]) += n_iterations_presb.second;
+              }
           }
 
         // apply T
@@ -2166,6 +2186,8 @@ namespace TimeIntegrationSchemes
 
       std::vector<std::unique_ptr<const PreconditionerBase<VectorType>>>
         &preconditioners;
+      std::vector<std::unique_ptr<const PreconditionerBase<BlockVectorType>>>
+        batched_precon;
 
       mutable std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>
         n_iterations;
@@ -2903,6 +2925,19 @@ namespace HeatEquation
       else
         AssertThrow(false, ExcNotImplemented());
 
+      if (params.time_integration_scheme == "complex_spirk" ||
+          params.time_integration_scheme == "complex_irk")
+        {
+          if (params.operator_type == "MatrixFree")
+            complex_mass_laplace_operator = std::make_unique<
+              ComplexMassLaplaceOperatorMatrixFree<dim, double>>(
+              dynamic_cast<const MassLaplaceOperatorMatrixFree<dim, double> *>(
+                mass_laplace_operator.get())
+                ->get_matrix_free());
+          else
+            AssertThrow(false, ExcNotImplemented());
+        }
+
       // select preconditioner
       std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
 
@@ -2930,6 +2965,8 @@ namespace HeatEquation
             mg_constraints(min_level, max_level);
           MGLevelObject<std::shared_ptr<const MassLaplaceOperator>>
             mg_operators(min_level, max_level);
+          MGLevelObject<std::shared_ptr<const ComplexMassLaplaceOperator>>
+            mg_complex_operators(min_level, max_level);
 
           for (unsigned int l = min_level; l <= max_level; ++l)
             {
@@ -2971,6 +3008,19 @@ namespace HeatEquation
           preconditioner = std::make_unique<
             PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
             this->dof_handler, mg_dof_handlers, mg_constraints, mg_operators);
+
+          if (params.time_integration_scheme == "irk_batched")
+            {
+              AssertThrow(false, ExcNotImplemented());
+            }
+          else if (params.time_integration_scheme == "complex_irk_batched")
+            {
+              AssertThrow(false, ExcNotImplemented());
+              // preconditioner = std::make_unique<
+              //  PreconditionerGMG<dim, ComplexMassLaplaceOperator,
+              //  VectorType>>( this->dof_handler, mg_dof_handlers,
+              //  mg_constraints, mg_complex_operators);
+            }
         }
       else
         AssertThrow(false, ExcNotImplemented());
@@ -3020,14 +3070,6 @@ namespace HeatEquation
             evaluate_rhs_function);
       else if (params.time_integration_scheme == "complex_irk")
         {
-          if (params.operator_type == "MatrixFree")
-            complex_mass_laplace_operator = std::make_unique<
-              ComplexMassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
-                                                                 constraints,
-                                                                 quadrature);
-          else
-            AssertThrow(false, ExcNotImplemented());
-
           if (false)
             complex_mass_laplace_operator->set_scalar_operator(
               *mass_laplace_operator);
@@ -3045,14 +3087,6 @@ namespace HeatEquation
         }
       else if (params.time_integration_scheme == "complex_spirk")
         {
-          if (params.operator_type == "MatrixFree")
-            complex_mass_laplace_operator = std::make_unique<
-              ComplexMassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
-                                                                 constraints,
-                                                                 quadrature);
-          else
-            AssertThrow(false, ExcNotImplemented());
-
           if (false)
             complex_mass_laplace_operator->set_scalar_operator(
               *mass_laplace_operator);

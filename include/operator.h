@@ -262,6 +262,12 @@ public:
     matrix_free.reinit(
       MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
   }
+  
+  const MatrixFree<dim, Number> &
+  get_matrix_free() const
+  {
+      return matrix_free;
+  }
 
   types::global_dof_index
   m() const override
@@ -452,6 +458,11 @@ public:
     , lambda_im(1.0)
     , tau(1.0)
   {}
+  
+  virtual ~ComplexMassLaplaceOperator() = default;
+
+  virtual void
+  initialize_dof_vector(BlockVectorType &vec) const = 0;
 
   void
   reinit(const double lambda_re, const double lambda_im, const double tau) const
@@ -479,23 +490,25 @@ class ComplexMassLaplaceOperatorMatrixFree : public ComplexMassLaplaceOperator
   using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
 
 public:
-  ComplexMassLaplaceOperatorMatrixFree(
-    const DoFHandler<dim> &          dof_handler,
-    const AffineConstraints<Number> &constraints,
-    const Quadrature<dim> &          quadrature)
+  ComplexMassLaplaceOperatorMatrixFree(const MatrixFree<dim, Number> & matrix_free)
+  : ComplexMassLaplaceOperator(), matrix_free(matrix_free)
   {
-    this->constraints = &constraints;
-
-    typename MatrixFree<dim, Number>::AdditionalData data;
-    data.mapping_update_flags = update_values | update_gradients;
-    matrix_free.reinit(
-      MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
   }
+  
+  virtual ~ComplexMassLaplaceOperatorMatrixFree() = default;
 
   void
   set_scalar_operator(MassLaplaceOperator &scalar_operator) override
   {
     this->scalar_operator = &scalar_operator;
+  }
+
+  void
+  initialize_dof_vector(BlockVectorType &vec) const override
+  {
+      vec.reinit(2);
+      matrix_free.initialize_dof_vector(vec.block(0));
+      matrix_free.initialize_dof_vector(vec.block(1));
   }
 
   void
@@ -570,9 +583,7 @@ public:
   }
 
 private:
-  SmartPointer<const AffineConstraints<Number>> constraints;
-
-  MatrixFree<dim, Number> matrix_free;
+  const MatrixFree<dim, Number> & matrix_free;
 
   const MassLaplaceOperator *scalar_operator = nullptr;
 
