@@ -1,0 +1,12 @@
+{ 
+    "FEDegree" : 1,
+    "NRefinements" : 7,
+    "TimeIntegrationScheme" : "complex_spirk_batched", 
+    "IRKStages" : "5",
+    "TimeStepSize" : "0.1",
+    "EndTime" : "0.5",
+    "OperatorType" : "MatrixFree",
+    "BlockPreconditionerType" : "GMG",
+    "InnerTolerance" : 0.0
+}
+
