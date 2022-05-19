@@ -2113,7 +2113,7 @@ namespace TimeIntegrationSchemes
                               d_vec_im[i * 2],
                               this->time_step);
 
-            if ("complex_irk_batched")
+            if (batched_precon.size() > 0)
               {
                 SolverGMRES<LinearAlgebra::distributed::BlockVector<double>>
                   solver(solver_control);
