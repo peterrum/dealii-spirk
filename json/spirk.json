@@ -7,7 +7,6 @@
     "EndTime" : "0.5",
     "OperatorType" : "MatrixFree",
     "BlockPreconditionerType" : "GMG",
-    "DoRowMajor" : true,
-    "Padding" : -1
+    "InnerTolerance" : 0.0
 }
 

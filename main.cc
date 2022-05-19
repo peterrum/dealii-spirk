@@ -910,7 +910,7 @@ namespace TimeIntegrationSchemes
             }
           else
             {
-              solver_name = "FGMRES";
+              solver_name = "GMRES";
 
               SolverGMRES<BlockVectorType> cg(solver_control);
               cg.solve(*system_matrix,
@@ -942,8 +942,9 @@ namespace TimeIntegrationSchemes
 
       pcout << n_inner_iterations[0];
 
-      for (unsigned int i = 1; i < n_inner_iterations.size(); ++i)
-        pcout << "+" << n_inner_iterations[i];
+      if (batch_preconditioner == nullptr)
+        for (unsigned int i = 1; i < n_inner_iterations.size(); ++i)
+          pcout << "+" << n_inner_iterations[i];
 
       pcout << " inner CG iterations." << std::endl;
 
@@ -1109,6 +1110,7 @@ namespace TimeIntegrationSchemes
         if (batch_preconditioner)
           {
             batch_preconditioner->vmult(tmp_vectors, dst);
+            n_iterations[0] += 1;
           }
         else
           {
@@ -1367,7 +1369,7 @@ namespace TimeIntegrationSchemes
             }
           else
             {
-              solver_name = "FGMRES";
+              solver_name = "GMRES";
 
               SolverGMRES<ReshapedVectorType> cg(solver_control);
               cg.solve(*system_matrix,
@@ -2027,14 +2029,26 @@ namespace TimeIntegrationSchemes
           this->n_inner_iterations += std::get<1>(i) + std::get<2>(i);
         }
 
-      pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
-            << std::get<1>(n_iterations[0]) << "+"
-            << std::get<2>(n_iterations[0]) << ")";
-      for (unsigned int i = 1; i < n_iterations.size(); ++i)
-        pcout << ", " << std::get<0>(n_iterations[i]) << " ("
-              << std::get<1>(n_iterations[i]) << "+"
-              << std::get<2>(n_iterations[i]) << ")";
-      pcout << std::endl;
+      if (batch_preconditioner)
+        {
+          pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+                << std::get<1>(n_iterations[0]) << ")";
+          for (unsigned int i = 1; i < n_iterations.size(); ++i)
+            pcout << ", " << std::get<0>(n_iterations[i]) << " ("
+                  << std::get<1>(n_iterations[i]) << ")";
+          pcout << std::endl;
+        }
+      else
+        {
+          pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+                << std::get<1>(n_iterations[0]) << "+"
+                << std::get<2>(n_iterations[0]) << ")";
+          for (unsigned int i = 1; i < n_iterations.size(); ++i)
+            pcout << ", " << std::get<0>(n_iterations[i]) << " ("
+                  << std::get<1>(n_iterations[i]) << "+"
+                  << std::get<2>(n_iterations[i]) << ")";
+          pcout << std::endl;
+        }
 
       const auto time_solution_update = std::chrono::system_clock::now();
 
@@ -2510,14 +2524,26 @@ namespace TimeIntegrationSchemes
       const auto n_iterations =
         Utilities::MPI::all_gather(comm_row, n_iterations_my);
 
-      pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
-            << std::get<1>(n_iterations[0]) << "+"
-            << std::get<2>(n_iterations[0]) << ")";
-      for (unsigned int i = 1; i < n_iterations.size(); ++i)
-        pcout << ", " << std::get<0>(n_iterations[i]) << " ("
-              << std::get<1>(n_iterations[i]) << "+"
-              << std::get<2>(n_iterations[i]) << ")";
-      pcout << std::endl;
+      if (batch_preconditioner)
+        {
+          pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+                << std::get<1>(n_iterations[0]) << ")";
+          for (unsigned int i = 1; i < n_iterations.size(); ++i)
+            pcout << ", " << std::get<0>(n_iterations[i]) << " ("
+                  << std::get<1>(n_iterations[i]) << ")";
+          pcout << std::endl;
+        }
+      else
+        {
+          pcout << "   Solved in: " << std::get<0>(n_iterations[0]) << " ("
+                << std::get<1>(n_iterations[0]) << "+"
+                << std::get<2>(n_iterations[0]) << ")";
+          for (unsigned int i = 1; i < n_iterations.size(); ++i)
+            pcout << ", " << std::get<0>(n_iterations[i]) << " ("
+                  << std::get<1>(n_iterations[i]) << "+"
+                  << std::get<2>(n_iterations[i]) << ")";
+          pcout << std::endl;
+        }
 
       const auto time_solution_update = std::chrono::system_clock::now();
 
