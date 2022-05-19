@@ -1,7 +1,7 @@
 { 
     "FEDegree" : 1,
     "NRefinements" : 7,
-    "TimeIntegrationScheme" : "irk", 
+    "TimeIntegrationScheme" : "irk_batched", 
     "IRKStages" : "5",
     "TimeStepSize" : "0.1",
     "EndTime" : "0.5",
