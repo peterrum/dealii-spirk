@@ -508,13 +508,8 @@ public:
   virtual void
   compute_inverse_diagonal(BlockVectorType &diagonal) const = 0;
 
-  types::global_dof_index
-  m() const
-  {
-    AssertThrow(false, ExcNotImplemented());
-
-    return 0;
-  }
+  virtual types::global_dof_index
+  m() const = 0;
 
   Number
   el(unsigned int, unsigned int) const
@@ -556,11 +551,27 @@ public:
     this->scalar_operator = &scalar_operator;
   }
 
+  types::global_dof_index
+  m() const override
+  {
+    return matrix_free.get_dof_handler().n_dofs() * 2;
+  }
+
   virtual void
   compute_inverse_diagonal(BlockVectorType &diagonal) const override
   {
-    Assert(false, ExcNotImplemented());
-    (void)diagonal;
+    this->initialize_dof_vector(diagonal);
+
+    MatrixFreeTools::compute_diagonal(
+      matrix_free,
+      diagonal.block(0),
+      &ComplexMassLaplaceOperatorMatrixFree::do_cell_integral,
+      this);
+    for (auto &i : diagonal.block(0))
+      i = (std::abs(i) > 1.0e-10) ? (1.0 / i) : 1.0;
+
+
+    diagonal.block(1) = diagonal.block(0);
   }
 
   void
@@ -573,8 +584,10 @@ public:
   initialize_dof_vector(BlockVectorType &vec) const override
   {
     vec.reinit(2);
-    matrix_free.initialize_dof_vector(vec.block(0));
-    matrix_free.initialize_dof_vector(vec.block(1));
+    this->initialize_dof_vector(vec.block(0));
+    this->initialize_dof_vector(vec.block(1));
+
+    vec.collect_sizes();
   }
 
   void
@@ -667,6 +680,21 @@ private:
   const MassLaplaceOperator *scalar_operator = nullptr;
 
   mutable SparseMatrixType system_matrix;
+
+  void
+  do_cell_integral(FECellIntegrator &integrator) const
+  {
+    integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+
+
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        integrator.submit_value(lambda_re * integrator.get_value(q), q);
+        integrator.submit_gradient(integrator.get_gradient(q) * tau, q);
+      }
+
+    integrator.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+  }
 };
 
 
