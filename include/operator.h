@@ -261,6 +261,11 @@ public:
     data.mapping_update_flags = update_values | update_gradients;
     matrix_free.reinit(
       MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+
+    constrained_indices.clear();
+
+    for (auto i : matrix_free.get_constrained_dofs())
+      constrained_indices.push_back(i);
   }
 
   const MatrixFree<dim, Number> &
@@ -299,11 +304,16 @@ public:
       dst,
       src,
       true);
+
+    for (const auto i : constrained_indices)
+      dst.local_element(i) = src.local_element(i);
   }
 
   void
   vmult_add(VectorType &dst, const VectorType &src) const override
   {
+    AssertThrow(false, ExcNotImplemented());
+
     this->matrix_free.cell_loop(
       &MassLaplaceOperatorMatrixFree::do_cell_integral_range,
       this,
@@ -443,6 +453,8 @@ private:
   SmartPointer<const AffineConstraints<Number>> constraints;
 
   MatrixFree<dim, Number> matrix_free;
+
+  mutable std::vector<unsigned int> constrained_indices;
 
   mutable SparseMatrixType system_matrix;
 };
@@ -696,7 +708,12 @@ public:
     const MatrixFree<dim, Number> &matrix_free)
     : BatchedMassLaplaceOperator(d_vec)
     , matrix_free(matrix_free)
-  {}
+  {
+    constrained_indices.clear();
+
+    for (auto i : matrix_free.get_constrained_dofs())
+      constrained_indices.push_back(i);
+  }
 
   virtual ~BatchedMassLaplaceOperatorMatrixFree() = default;
 
@@ -751,6 +768,12 @@ public:
       dst,
       src,
       true);
+
+    for (unsigned int b = 0; b < this->d_vec.size(); ++b)
+      {
+        for (const auto i : constrained_indices)
+          dst.block(b).local_element(i) = src.block(b).local_element(i);
+      }
   }
 
   void
@@ -762,8 +785,9 @@ public:
   }
 
 private:
-  const MatrixFree<dim, Number> &matrix_free;
-  mutable unsigned int           current_block;
+  const MatrixFree<dim, Number> &   matrix_free;
+  mutable unsigned int              current_block;
+  mutable std::vector<unsigned int> constrained_indices;
 
   void
   do_cell_integral_range(

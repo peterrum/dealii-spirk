@@ -360,10 +360,17 @@ public:
         smoother_data[level].degree          = additional_data.smoothing_degree;
         smoother_data[level].eig_cg_n_iterations =
           additional_data.smoothing_eig_cg_n_iterations;
-        smoother_data[level].constraints.copy_from(*mg_constraints[level]);
+        // smoother_data[level].constraints.copy_from(*mg_constraints[level]);
       }
 
     mg_smoother.initialize(mg_operators, smoother_data);
+
+    for (unsigned int level = min_level; level <= max_level; ++level)
+      {
+        VectorType vec;
+        mg_operators[level]->initialize_dof_vector(vec);
+        mg_smoother.smoothers[level].estimate_eigenvalues(vec);
+      }
 
     if constexpr (working_on_block_vector == false)
       {
@@ -399,7 +406,10 @@ public:
       }
     else
       {
-        AssertThrow(false, ExcNotImplemented());
+        // setup coarse-grid solver
+        mg_coarse = std::make_unique<
+          MGCoarseGridApplyPreconditioner<VectorType, SmootherType>>(
+          mg_smoother.smoothers[min_level]);
       }
 
     // create multigrid algorithm (put level operators, smoothers, transfer

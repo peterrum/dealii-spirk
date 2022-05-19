@@ -2977,7 +2977,7 @@ namespace HeatEquation
           mg_triangulations = MGTransferGlobalCoarseningTools::
             create_geometric_coarsening_sequence(triangulation, policy);
 
-          const unsigned int min_level = 0;
+          const unsigned int min_level = 1;
           const unsigned int max_level = mg_triangulations.size() - 1;
 
           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
