@@ -485,6 +485,15 @@ public:
     this->lambda_re = lambda_re;
     this->lambda_im = lambda_im;
     this->tau       = tau;
+
+    for (const auto &op : attached_operators)
+      op->reinit(this->lambda_re, this->lambda_im, this->tau);
+  }
+
+  void
+  attach(const ComplexMassLaplaceOperator &other) const
+  {
+    attached_operators.push_back(&other);
   }
 
   virtual void
@@ -518,6 +527,8 @@ protected:
   mutable double lambda_re;
   mutable double lambda_im;
   mutable double tau;
+
+  mutable std::vector<const ComplexMassLaplaceOperator *> attached_operators;
 };
 
 template <int dim, typename Number>

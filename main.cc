@@ -2866,7 +2866,7 @@ namespace HeatEquation
         time_integration_scheme,
         "",
         Patterns::Selection(
-          "ost|irk|irk_batched|spirk|complex_irk|complex_spirk"));
+          "ost|irk|irk_batched|spirk|complex_irk|complex_irk_batched|complex_spirk"));
       prm.add_parameter("EndTime", end_time);
       prm.add_parameter("TimeStepSize", time_step_size);
       prm.add_parameter("IRKStages", irk_stages);
@@ -3072,7 +3072,8 @@ namespace HeatEquation
                       mg_operators[l].get())
                       ->get_matrix_free());
 
-                  // complex_mass_laplace_operator->attach(*mg_complex_operators[l]);
+                  complex_mass_laplace_operator->attach(
+                    *mg_complex_operators[l]);
                 }
 
               preconditioner_batch =
