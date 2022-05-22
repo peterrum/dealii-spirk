@@ -261,6 +261,17 @@ public:
     data.mapping_update_flags = update_values | update_gradients;
     matrix_free.reinit(
       MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+
+    constrained_indices.clear();
+
+    for (auto i : matrix_free.get_constrained_dofs())
+      constrained_indices.push_back(i);
+  }
+
+  const MatrixFree<dim, Number> &
+  get_matrix_free() const
+  {
+    return matrix_free;
   }
 
   types::global_dof_index
@@ -293,11 +304,16 @@ public:
       dst,
       src,
       true);
+
+    for (const auto i : constrained_indices)
+      dst.local_element(i) = src.local_element(i);
   }
 
   void
   vmult_add(VectorType &dst, const VectorType &src) const override
   {
+    AssertThrow(false, ExcNotImplemented());
+
     this->matrix_free.cell_loop(
       &MassLaplaceOperatorMatrixFree::do_cell_integral_range,
       this,
@@ -438,6 +454,8 @@ private:
 
   MatrixFree<dim, Number> matrix_free;
 
+  mutable std::vector<unsigned int> constrained_indices;
+
   mutable SparseMatrixType system_matrix;
 };
 
@@ -453,12 +471,29 @@ public:
     , tau(1.0)
   {}
 
+  virtual ~ComplexMassLaplaceOperator() = default;
+
+  virtual void
+  initialize_dof_vector(VectorType &vec) const = 0;
+
+  virtual void
+  initialize_dof_vector(BlockVectorType &vec) const = 0;
+
   void
   reinit(const double lambda_re, const double lambda_im, const double tau) const
   {
     this->lambda_re = lambda_re;
     this->lambda_im = lambda_im;
     this->tau       = tau;
+
+    for (const auto &op : attached_operators)
+      op->reinit(this->lambda_re, this->lambda_im, this->tau);
+  }
+
+  void
+  attach(const ComplexMassLaplaceOperator &other) const
+  {
+    attached_operators.push_back(&other);
   }
 
   virtual void
@@ -467,10 +502,28 @@ public:
   virtual void
   vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
 
+  virtual void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const = 0;
+
+  virtual types::global_dof_index
+  m() const = 0;
+
+  Number
+  el(unsigned int, unsigned int) const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    return 0.0;
+  }
+
 protected:
   mutable double lambda_re;
   mutable double lambda_im;
   mutable double tau;
+
+  mutable std::vector<const ComplexMassLaplaceOperator *> attached_operators;
 };
 
 template <int dim, typename Number>
@@ -480,22 +533,61 @@ class ComplexMassLaplaceOperatorMatrixFree : public ComplexMassLaplaceOperator
 
 public:
   ComplexMassLaplaceOperatorMatrixFree(
-    const DoFHandler<dim> &          dof_handler,
-    const AffineConstraints<Number> &constraints,
-    const Quadrature<dim> &          quadrature)
+    const MatrixFree<dim, Number> &matrix_free)
+    : ComplexMassLaplaceOperator()
+    , matrix_free(matrix_free)
   {
-    this->constraints = &constraints;
+    constrained_indices.clear();
 
-    typename MatrixFree<dim, Number>::AdditionalData data;
-    data.mapping_update_flags = update_values | update_gradients;
-    matrix_free.reinit(
-      MappingQ1<dim>(), dof_handler, constraints, quadrature, data);
+    for (auto i : matrix_free.get_constrained_dofs())
+      constrained_indices.push_back(i);
   }
+
+  virtual ~ComplexMassLaplaceOperatorMatrixFree() = default;
 
   void
   set_scalar_operator(MassLaplaceOperator &scalar_operator) override
   {
     this->scalar_operator = &scalar_operator;
+  }
+
+  types::global_dof_index
+  m() const override
+  {
+    return matrix_free.get_dof_handler().n_dofs() * 2;
+  }
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const override
+  {
+    this->initialize_dof_vector(diagonal);
+
+    MatrixFreeTools::compute_diagonal(
+      matrix_free,
+      diagonal.block(0),
+      &ComplexMassLaplaceOperatorMatrixFree::do_cell_integral,
+      this);
+    for (auto &i : diagonal.block(0))
+      i = (std::abs(i) > 1.0e-10) ? (1.0 / i) : 1.0;
+
+
+    diagonal.block(1) = diagonal.block(0);
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
+  void
+  initialize_dof_vector(BlockVectorType &vec) const override
+  {
+    vec.reinit(2);
+    this->initialize_dof_vector(vec.block(0));
+    this->initialize_dof_vector(vec.block(1));
+
+    vec.collect_sizes();
   }
 
   void
@@ -566,15 +658,224 @@ public:
           dst,
           src,
           true);
+
+        for (unsigned int b = 0; b < 2; ++b)
+          for (const auto i : constrained_indices)
+            dst.block(b).local_element(i) = src.block(b).local_element(i);
       }
   }
 
-private:
-  SmartPointer<const AffineConstraints<Number>> constraints;
+  void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)dst;
+    (void)src;
+  }
 
-  MatrixFree<dim, Number> matrix_free;
+private:
+  const MatrixFree<dim, Number> &   matrix_free;
+  mutable std::vector<unsigned int> constrained_indices;
 
   const MassLaplaceOperator *scalar_operator = nullptr;
 
   mutable SparseMatrixType system_matrix;
+
+  void
+  do_cell_integral(FECellIntegrator &integrator) const
+  {
+    integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+
+
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        integrator.submit_value(lambda_re * integrator.get_value(q), q);
+        integrator.submit_gradient(integrator.get_gradient(q) * tau, q);
+      }
+
+    integrator.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+  }
+};
+
+
+class BatchedMassLaplaceOperator : public Subscriptor
+{
+public:
+  using Number = typename VectorType::value_type;
+
+  BatchedMassLaplaceOperator(const Vector<double> d_vec)
+    : d_vec(d_vec)
+  {}
+
+  virtual ~BatchedMassLaplaceOperator() = default;
+
+  void
+  reinit(const double tau) const
+  {
+    this->tau = tau;
+  }
+
+  virtual void
+  initialize_dof_vector(VectorType &vec) const = 0;
+
+  virtual void
+  initialize_dof_vector(BlockVectorType &vec) const = 0;
+
+  virtual void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+  virtual void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const = 0;
+
+  virtual types::global_dof_index
+  m() const = 0;
+
+  Number
+  el(unsigned int, unsigned int) const
+  {
+    AssertThrow(false, ExcNotImplemented());
+    return 0.0;
+  }
+
+protected:
+protected:
+  mutable double       tau;
+  const Vector<double> d_vec;
+};
+
+template <int dim, typename Number>
+class BatchedMassLaplaceOperatorMatrixFree : public BatchedMassLaplaceOperator
+{
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+public:
+  BatchedMassLaplaceOperatorMatrixFree(
+    const Vector<double>           d_vec,
+    const MatrixFree<dim, Number> &matrix_free)
+    : BatchedMassLaplaceOperator(d_vec)
+    , matrix_free(matrix_free)
+  {
+    constrained_indices.clear();
+
+    for (auto i : matrix_free.get_constrained_dofs())
+      constrained_indices.push_back(i);
+  }
+
+  virtual ~BatchedMassLaplaceOperatorMatrixFree() = default;
+
+  types::global_dof_index
+  m() const override
+  {
+    return matrix_free.get_dof_handler().n_dofs() * this->d_vec.size();
+  }
+
+  virtual void
+  compute_inverse_diagonal(BlockVectorType &diagonal) const override
+  {
+    this->initialize_dof_vector(diagonal);
+
+    for (unsigned int b = 0; b < this->d_vec.size(); ++b)
+      {
+        this->current_block = b;
+
+        MatrixFreeTools::compute_diagonal(
+          matrix_free,
+          diagonal.block(b),
+          &BatchedMassLaplaceOperatorMatrixFree::do_cell_integral,
+          this);
+        for (auto &i : diagonal.block(b))
+          i = (std::abs(i) > 1.0e-10) ? (1.0 / i) : 1.0;
+      }
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const override
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
+  void
+  initialize_dof_vector(BlockVectorType &vec) const override
+  {
+    vec.reinit(this->d_vec.size());
+
+    for (unsigned int i = 0; i < this->d_vec.size(); ++i)
+      matrix_free.initialize_dof_vector(vec.block(i));
+
+    vec.collect_sizes();
+  }
+
+  void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    this->matrix_free.cell_loop(
+      &BatchedMassLaplaceOperatorMatrixFree::do_cell_integral_range,
+      this,
+      dst,
+      src,
+      true);
+
+    for (unsigned int b = 0; b < this->d_vec.size(); ++b)
+      {
+        for (const auto i : constrained_indices)
+          dst.block(b).local_element(i) = src.block(b).local_element(i);
+      }
+  }
+
+  void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
+  {
+    AssertThrow(false, ExcNotImplemented());
+    (void)dst;
+    (void)src;
+  }
+
+private:
+  const MatrixFree<dim, Number> &   matrix_free;
+  mutable unsigned int              current_block;
+  mutable std::vector<unsigned int> constrained_indices;
+
+  void
+  do_cell_integral_range(
+    const MatrixFree<dim, Number> &              matrix_free,
+    BlockVectorType &                            dst,
+    const BlockVectorType &                      src,
+    const std::pair<unsigned int, unsigned int> &range) const
+  {
+    FECellIntegrator integrator(matrix_free, range);
+    for (unsigned cell = range.first; cell < range.second; ++cell)
+      {
+        integrator.reinit(cell);
+
+        for (unsigned int b = 0; b < this->d_vec.size(); ++b)
+          {
+            this->current_block = b;
+
+            integrator.read_dof_values(src.block(b));
+
+            do_cell_integral(integrator);
+
+            integrator.distribute_local_to_global(dst.block(b));
+          }
+      }
+  }
+
+  void
+  do_cell_integral(FECellIntegrator &integrator) const
+  {
+    integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        integrator.submit_value(this->d_vec[current_block] *
+                                  integrator.get_value(q),
+                                q);
+        integrator.submit_gradient(tau * integrator.get_gradient(q), q);
+      }
+
+    integrator.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+  }
 };
