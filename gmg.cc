@@ -79,6 +79,8 @@ test(const Parameters & params,
   constraints.close();
 
   std::shared_ptr<const MassLaplaceOperator> mass_laplace_operator;
+  std::unique_ptr<const BatchedMassLaplaceOperator>
+    mass_laplace_operator_batched;
 
   if (params.operator_type == "MatrixBased")
     mass_laplace_operator =
@@ -93,7 +95,8 @@ test(const Parameters & params,
     AssertThrow(false, ExcNotImplemented());
 
 
-  std::unique_ptr<PreconditionerBase<VectorType>> preconditioner;
+  std::unique_ptr<PreconditionerBase<VectorType>>      preconditioner;
+  std::shared_ptr<PreconditionerBase<BlockVectorType>> preconditioner_batch;
 
   std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations;
 
@@ -120,6 +123,8 @@ test(const Parameters & params,
         mg_constraints(min_level, max_level);
       MGLevelObject<std::shared_ptr<const MassLaplaceOperator>> mg_operators(
         min_level, max_level);
+      MGLevelObject<std::shared_ptr<const BatchedMassLaplaceOperator>>
+        mg_batched_operators(min_level, max_level);
 
       for (unsigned int l = min_level; l <= max_level; ++l)
         {
@@ -161,6 +166,45 @@ test(const Parameters & params,
       preconditioner = std::make_unique<
         PreconditionerGMG<dim, MassLaplaceOperator, VectorType>>(
         dof_handler, mg_dof_handlers, mg_constraints, mg_operators);
+
+      if ((n_components_static != n_components) &&
+          (n_components_static == 1 && n_components > 1))
+        {
+          Vector<double> coeff(n_components);
+
+          for (unsigned int i = 0; i < n_components; ++i)
+            coeff[i] = 1.0;
+
+          mass_laplace_operator_batched =
+            std::make_unique<BatchedMassLaplaceOperatorMatrixFree<dim, double>>(
+              coeff,
+              dynamic_cast<const MassLaplaceOperatorMatrixFree<dim, double> *>(
+                mass_laplace_operator.get())
+                ->get_matrix_free());
+
+          mass_laplace_operator_batched->reinit(1.0);
+
+          for (unsigned int l = min_level; l <= max_level; ++l)
+            {
+              mg_batched_operators[l] = std::make_shared<
+                BatchedMassLaplaceOperatorMatrixFree<dim, double>>(
+                coeff,
+                dynamic_cast<const MassLaplaceOperatorMatrixFree<dim, double>
+                               *>(mg_operators[l].get())
+                  ->get_matrix_free());
+              mg_batched_operators[l]->reinit(1.0);
+            }
+
+          preconditioner_batch =
+            std::make_shared<PreconditionerGMG<dim,
+                                               BatchedMassLaplaceOperator,
+                                               BlockVectorType,
+                                               VectorType>>(
+              dof_handler,
+              mg_dof_handlers,
+              mg_constraints,
+              mg_batched_operators);
+        }
     }
   else
     AssertThrow(false, ExcNotImplemented());
@@ -178,8 +222,9 @@ test(const Parameters & params,
       mass_laplace_operator->initialize_dof_vector(dst);
       mass_laplace_operator->initialize_dof_vector(src);
 
-      VectorTools::create_right_hand_side(
-        dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
+      // VectorTools::create_right_hand_side(
+      //  dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
+      src = 1.0;
 
       SolverCG<VectorType> cg(solver_control);
 
@@ -202,7 +247,39 @@ test(const Parameters & params,
     }
   else if (n_components_static == 1 && n_components > 1)
     {
-      AssertThrow(false, ExcNotImplemented());
+      preconditioner_batch->reinit();
+
+      BlockVectorType dst, src;
+
+      mass_laplace_operator_batched->initialize_dof_vector(dst);
+      mass_laplace_operator_batched->initialize_dof_vector(src);
+
+      src = 1.0;
+
+      SolverCG<BlockVectorType> cg(solver_control);
+
+      {
+        dst = 0.0;
+        cg.solve(*mass_laplace_operator_batched,
+                 dst,
+                 src,
+                 *preconditioner_batch);
+      }
+
+      for (unsigned int counter = 0; counter < n_repetitions; ++counter)
+        {
+          dst = 0.0;
+
+          const auto temp = std::chrono::system_clock::now();
+          cg.solve(*mass_laplace_operator_batched,
+                   dst,
+                   src,
+                   *preconditioner_batch);
+          time += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::system_clock::now() - temp)
+                    .count() /
+                  1e9;
+        }
     }
   else
     {
@@ -299,7 +376,7 @@ main(int argc, char **argv)
               MPI_Comm_free(&sub_comm);
             }
 
-          if (true) // n components
+          if (true) // n components -> batched
             {
               test_components<1>(params, MPI_COMM_WORLD, n_components, table);
             }
