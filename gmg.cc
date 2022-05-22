@@ -53,16 +53,19 @@ public:
 private:
 };
 
-template <int dim, int n_components = 1>
+template <int dim, int n_components_static = 1>
 void
-test(const Parameters &params, const MPI_Comm &comm, ConvergenceTable &table)
+test(const Parameters & params,
+     const MPI_Comm &   comm,
+     const unsigned int n_components,
+     ConvergenceTable & table)
 {
   parallel::distributed::Triangulation<dim> triangulation(comm);
   GridGenerator::hyper_cube(triangulation);
   triangulation.refine_global(params.n_refinements);
 
   QGauss<dim>   quadrature(params.fe_degree + 1);
-  FESystem<dim> fe(FE_Q<dim>(params.fe_degree), n_components);
+  FESystem<dim> fe(FE_Q<dim>(params.fe_degree), n_components_static);
 
   DoFHandler<dim> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
@@ -84,9 +87,8 @@ test(const Parameters &params, const MPI_Comm &comm, ConvergenceTable &table)
                                                        quadrature);
   else if (params.operator_type == "MatrixFree")
     mass_laplace_operator = std::make_unique<
-      MassLaplaceOperatorMatrixFree<dim, double, n_components>>(dof_handler,
-                                                                constraints,
-                                                                quadrature);
+      MassLaplaceOperatorMatrixFree<dim, double, n_components_static>>(
+      dof_handler, constraints, quadrature);
   else
     AssertThrow(false, ExcNotImplemented());
 
@@ -145,7 +147,7 @@ test(const Parameters &params, const MPI_Comm &comm, ConvergenceTable &table)
                                                                quadrature);
           else if (params.operator_type == "MatrixFree")
             mg_operators[l] = std::make_unique<
-              MassLaplaceOperatorMatrixFree<dim, double, n_components>>(
+              MassLaplaceOperatorMatrixFree<dim, double, n_components_static>>(
               *dof_handler, *constraints, quadrature);
           else
             AssertThrow(false, ExcNotImplemented());
@@ -163,38 +165,48 @@ test(const Parameters &params, const MPI_Comm &comm, ConvergenceTable &table)
   else
     AssertThrow(false, ExcNotImplemented());
 
-  preconditioner->reinit();
-
-  VectorType dst, src;
-
-  mass_laplace_operator->initialize_dof_vector(dst);
-  mass_laplace_operator->initialize_dof_vector(src);
-
-  VectorTools::create_right_hand_side(
-    dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
-
-  ReductionControl     solver_control(1000, 1e-20, 1e-12);
-  SolverCG<VectorType> cg(solver_control);
-
-  {
-    dst = 0.0;
-    cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
-  }
-
-  double time = 0.0;
-
+  double             time = 0.0;
+  ReductionControl   solver_control(1000, 1e-20, 1e-12);
   const unsigned int n_repetitions = 10;
 
-  for (unsigned int counter = 0; counter < n_repetitions; ++counter)
+  if (n_components_static == n_components)
     {
-      dst = 0.0;
+      preconditioner->reinit();
 
-      const auto temp = std::chrono::system_clock::now();
-      cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
-      time += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::system_clock::now() - temp)
-                .count() /
-              1e9;
+      VectorType dst, src;
+
+      mass_laplace_operator->initialize_dof_vector(dst);
+      mass_laplace_operator->initialize_dof_vector(src);
+
+      VectorTools::create_right_hand_side(
+        dof_handler, quadrature, RightHandSide<dim>(), src, constraints);
+
+      SolverCG<VectorType> cg(solver_control);
+
+      {
+        dst = 0.0;
+        cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
+      }
+
+      for (unsigned int counter = 0; counter < n_repetitions; ++counter)
+        {
+          dst = 0.0;
+
+          const auto temp = std::chrono::system_clock::now();
+          cg.solve(*mass_laplace_operator, dst, src, *preconditioner);
+          time += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::system_clock::now() - temp)
+                    .count() /
+                  1e9;
+        }
+    }
+  else if (n_components_static == 1 && n_components > 1)
+    {
+      AssertThrow(false, ExcNotImplemented());
+    }
+  else
+    {
+      AssertThrow(false, ExcNotImplemented());
     }
 
   time = Utilities::MPI::sum(time, MPI_COMM_WORLD) /
@@ -216,16 +228,17 @@ test(const Parameters &params, const MPI_Comm &comm, ConvergenceTable &table)
   table.set_scientific("time", true);
 }
 
-template <int n_components>
+template <int n_components_static>
 void
-test_components(const Parameters &params,
-                const MPI_Comm    comm,
-                ConvergenceTable &table)
+test_components(const Parameters & params,
+                const MPI_Comm     comm,
+                const unsigned int n_components,
+                ConvergenceTable & table)
 {
   if (params.dim == 2)
-    test<2, n_components>(params, comm, table);
+    test<2, n_components_static>(params, comm, n_components, table);
   else if (params.dim == 3)
-    test<3, n_components>(params, comm, table);
+    test<3, n_components_static>(params, comm, n_components, table);
   else
     AssertThrow(false, ExcNotImplemented());
 }
@@ -255,14 +268,19 @@ main(int argc, char **argv)
         {
           params.n_refinements = i;
 
+          constexpr unsigned int n_components = 8;
+
           if (true) // 1 component
             {
-              test_components<1>(params, MPI_COMM_WORLD, table);
+              test_components<1>(params, MPI_COMM_WORLD, 1, table);
             }
 
           if (true) // n components
             {
-              test_components<8>(params, MPI_COMM_WORLD, table);
+              test_components<n_components>(params,
+                                            MPI_COMM_WORLD,
+                                            n_components,
+                                            table);
             }
 
           if (true) // n subgroups -> one for each component
@@ -272,13 +290,18 @@ main(int argc, char **argv)
               MPI_Comm_rank(MPI_COMM_WORLD, &rank);
               MPI_Comm sub_comm;
               MPI_Comm_split(MPI_COMM_WORLD,
-                             rank / (size / 8),
+                             rank / (size / n_components),
                              rank,
                              &sub_comm);
 
-              test_components<1>(params, sub_comm, table);
+              test_components<1>(params, sub_comm, 1, table);
 
               MPI_Comm_free(&sub_comm);
+            }
+
+          if (true) // n components
+            {
+              test_components<1>(params, MPI_COMM_WORLD, n_components, table);
             }
 
           if (pcout.is_active())
