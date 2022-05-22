@@ -4,6 +4,8 @@
 
 #include <deal.II/distributed/repartitioning_policy_tools.h>
 
+#include <deal.II/fe/fe_system.h>
+
 #include <deal.II/grid/grid_generator.h>
 
 #include <deal.II/lac/la_parallel_block_vector.h>
@@ -51,16 +53,16 @@ public:
 private:
 };
 
-template <int dim>
+template <int dim, int n_components = 1>
 void
-test(const Parameters &params, ConvergenceTable &table)
+test(const Parameters &params, const MPI_Comm &comm, ConvergenceTable &table)
 {
-  parallel::distributed::Triangulation<dim> triangulation(MPI_COMM_WORLD);
+  parallel::distributed::Triangulation<dim> triangulation(comm);
   GridGenerator::hyper_cube(triangulation);
   triangulation.refine_global(params.n_refinements);
 
-  QGauss<dim> quadrature(params.fe_degree + 1);
-  FE_Q<dim>   fe(params.fe_degree);
+  QGauss<dim>   quadrature(params.fe_degree + 1);
+  FESystem<dim> fe(FE_Q<dim>(params.fe_degree), n_components);
 
   DoFHandler<dim> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
@@ -81,10 +83,10 @@ test(const Parameters &params, ConvergenceTable &table)
                                                        constraints,
                                                        quadrature);
   else if (params.operator_type == "MatrixFree")
-    mass_laplace_operator =
-      std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(dof_handler,
-                                                                   constraints,
-                                                                   quadrature);
+    mass_laplace_operator = std::make_unique<
+      MassLaplaceOperatorMatrixFree<dim, double, n_components>>(dof_handler,
+                                                                constraints,
+                                                                quadrature);
   else
     AssertThrow(false, ExcNotImplemented());
 
@@ -142,9 +144,9 @@ test(const Parameters &params, ConvergenceTable &table)
                                                                *constraints,
                                                                quadrature);
           else if (params.operator_type == "MatrixFree")
-            mg_operators[l] =
-              std::make_unique<MassLaplaceOperatorMatrixFree<dim, double>>(
-                *dof_handler, *constraints, quadrature);
+            mg_operators[l] = std::make_unique<
+              MassLaplaceOperatorMatrixFree<dim, double, n_components>>(
+              *dof_handler, *constraints, quadrature);
           else
             AssertThrow(false, ExcNotImplemented());
 
@@ -204,11 +206,28 @@ test(const Parameters &params, ConvergenceTable &table)
   table.add_value("n_procs", Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD));
   table.add_value("n_cells",
                   dof_handler.get_triangulation().n_global_active_cells());
-  table.add_value("n_dofs", dof_handler.n_dofs());
+
+  const unsigned int n_roots = Utilities::MPI::sum<unsigned int>(
+    Utilities::MPI::this_mpi_process(comm) == 0, MPI_COMM_WORLD);
+  table.add_value("n_dofs", dof_handler.n_dofs() * n_roots);
   table.add_value("L", triangulation.n_global_levels());
   table.add_value("n_iterations", solver_control.last_step());
   table.add_value("time", time);
   table.set_scientific("time", true);
+}
+
+template <int n_components>
+void
+test_components(const Parameters &params,
+                const MPI_Comm    comm,
+                ConvergenceTable &table)
+{
+  if (params.dim == 2)
+    test<2, n_components>(params, comm, table);
+  else if (params.dim == 3)
+    test<3, n_components>(params, comm, table);
+  else
+    AssertThrow(false, ExcNotImplemented());
 }
 
 int
@@ -236,12 +255,31 @@ main(int argc, char **argv)
         {
           params.n_refinements = i;
 
-          if (params.dim == 2)
-            test<2>(params, table);
-          else if (params.dim == 3)
-            test<3>(params, table);
-          else
-            AssertThrow(false, ExcNotImplemented());
+          if (true) // 1 component
+            {
+              test_components<1>(params, MPI_COMM_WORLD, table);
+            }
+
+          if (true) // n components
+            {
+              test_components<8>(params, MPI_COMM_WORLD, table);
+            }
+
+          if (true) // n subgroups -> one for each component
+            {
+              int rank, size;
+              MPI_Comm_size(MPI_COMM_WORLD, &size);
+              MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+              MPI_Comm sub_comm;
+              MPI_Comm_split(MPI_COMM_WORLD,
+                             rank / (size / 8),
+                             rank,
+                             &sub_comm);
+
+              test_components<1>(params, sub_comm, table);
+
+              MPI_Comm_free(&sub_comm);
+            }
 
           if (pcout.is_active())
             {

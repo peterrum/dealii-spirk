@@ -247,7 +247,7 @@ private:
 
 
 
-template <int dim, typename Number>
+template <int dim, typename Number, int n_components = 1>
 class MassLaplaceOperatorMatrixFree : public MassLaplaceOperator
 {
 public:
@@ -374,7 +374,7 @@ public:
 
 
 private:
-  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, n_components, Number>;
 
   void
   do_cell_integral_range(
