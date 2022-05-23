@@ -689,7 +689,12 @@ namespace TimeIntegrationSchemes
     get_statistics(ConvergenceTable &table,
                    const double      scaling_factor = 1.0) const override
     {
-      table.add_value("n_outer", n_outer_iterations / scaling_factor);
+      const auto n_outer_iterations_min_max_avg =
+        Utilities::MPI::min_max_avg(n_outer_iterations / scaling_factor, comm);
+
+      table.add_value("n_outer_min", n_outer_iterations_min_max_avg.min);
+      table.add_value("n_outer_avg", n_outer_iterations_min_max_avg.avg);
+      table.add_value("n_outer_max", n_outer_iterations_min_max_avg.max);
 
       const auto n_inner_iterations_min_max_avg =
         Utilities::MPI::min_max_avg(n_inner_iterations / scaling_factor, comm);
@@ -1816,6 +1821,14 @@ namespace TimeIntegrationSchemes
       add_time("t_vmult", time_system_vmult);
       add_time("t_prec_bc", time_preconditioner_bc);
       add_time("t_prec_solver", time_preconditioner_solver);
+
+
+      for (unsigned int i = 0; i < 10; ++i)
+        {
+          const std::string label = "t_prec_solver_" + std::to_string(i);
+          table.add_value(label, 0.0); // TODO
+          table.set_scientific(label, true);
+        }
     }
 
   protected:

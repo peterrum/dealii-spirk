@@ -102,3 +102,11 @@ python ../../IRK/scripts/parameters_q.py "complex_"
 sbatch ../../IRK/experiments-skx/parameters-0768.cmd
 cd ..
 ```
+
+```bash
+mkdir -p parameters-all-q
+cd parameters-all-q
+python ../../IRK/scripts/parameters_all_q.py
+sbatch ../../IRK/experiments-skx/parameters-0768.cmd
+cd ..
+```
