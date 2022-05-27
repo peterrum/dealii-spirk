@@ -84,6 +84,12 @@ cd gmg-scaling
 python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
+
+mkdir gmg-batched
+cd gmg-batched
+python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
+sbatch node-0016.cmd
+cd ..
 ```
 
 ```bash
