@@ -3212,7 +3212,7 @@ namespace HeatEquation
 
       const auto evaluate_rhs_function = [&](const double time,
                                              VectorType & tmp) -> void {
-        RightHandSide rhs_function;
+        RightHandSide rhs_function(params.n_refinements);
         rhs_function.set_time(time);
         VectorTools::create_right_hand_side(
           dof_handler, quadrature, rhs_function, tmp, constraints);
@@ -3298,7 +3298,9 @@ namespace HeatEquation
       double       time            = 0.0;
       unsigned int timestep_number = 0;
 
-      VectorTools::interpolate(dof_handler, AnalyticalSolution(), solution);
+      VectorTools::interpolate(dof_handler,
+                               AnalyticalSolution(params.n_refinements, 0),
+                               solution);
 
       auto error = output_results(time, timestep_number);
 
@@ -3433,23 +3435,25 @@ namespace HeatEquation
         {
           solution.update_ghost_values();
           Vector<float> norm_per_cell(triangulation.n_active_cells());
-          VectorTools::integrate_difference(dof_handler,
-                                            solution,
-                                            AnalyticalSolution(time),
-                                            norm_per_cell,
-                                            QGauss<dim>(fe.degree + 2),
-                                            VectorTools::L2_norm);
+          VectorTools::integrate_difference(
+            dof_handler,
+            solution,
+            AnalyticalSolution(params.n_refinements, time),
+            norm_per_cell,
+            QGauss<dim>(fe.degree + 2),
+            VectorTools::L2_norm);
           const double error_L2_norm =
             VectorTools::compute_global_error(triangulation,
                                               norm_per_cell,
                                               VectorTools::L2_norm);
 
-          VectorTools::integrate_difference(dof_handler,
-                                            solution,
-                                            AnalyticalSolution(time),
-                                            norm_per_cell,
-                                            QGauss<dim>(fe.degree + 2),
-                                            VectorTools::Linfty_norm);
+          VectorTools::integrate_difference(
+            dof_handler,
+            solution,
+            AnalyticalSolution(params.n_refinements, time),
+            norm_per_cell,
+            QGauss<dim>(fe.degree + 2),
+            VectorTools::Linfty_norm);
           const double error_Linfty_norm =
             VectorTools::compute_global_error(triangulation,
                                               norm_per_cell,
@@ -3489,13 +3493,19 @@ namespace HeatEquation
     class RightHandSide : public Function<dim>
     {
     public:
-      RightHandSide()
+      static constexpr bool const_wave = false;
+
+      RightHandSide(const unsigned int numberofref)
         : Function<dim>()
-        , a_x(2.0)
-        , a_y(2.0)
-        , a_z(2.0)
+        , a_x(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_y(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_z(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
-      {}
+        , c_t(4.)
+      {
+        AssertThrow(const_wave || numberofref >= 2,
+                    ExcMessage("Not enough refinements!"));
+      }
 
       virtual double
       value(const Point<dim> & p,
@@ -3511,19 +3521,19 @@ namespace HeatEquation
         if (dim == 2)
           return std::sin(a_x * numbers::PI * x) *
                  std::sin(a_y * numbers::PI * y) *
-                 (numbers::PI * std::cos(numbers::PI * t) -
-                  a_t * (std::sin(numbers::PI * t) + 1) +
+                 (numbers::PI * c_t * std::cos(numbers::PI * c_t * t) -
+                  a_t * (std::sin(numbers::PI * c_t * t) + 1) +
                   (a_x * a_x + a_y * a_y) * numbers::PI * numbers::PI *
-                    (std::sin(numbers::PI * t) + 1)) *
+                    (std::sin(numbers::PI * c_t * t) + 1)) *
                  std::exp(-a_t * t);
         else if (dim == 3)
           return std::sin(a_x * numbers::PI * x) *
                  std::sin(a_y * numbers::PI * y) *
                  std::sin(a_z * numbers::PI * z) *
-                 (numbers::PI * std::cos(numbers::PI * t) -
-                  a_t * (std::sin(numbers::PI * t) + 1) +
+                 (numbers::PI * c_t * std::cos(numbers::PI * c_t * t) -
+                  a_t * (std::sin(numbers::PI * c_t * t) + 1) +
                   (a_x * a_x + a_y * a_y + a_z * a_z) * numbers::PI *
-                    numbers::PI * (std::sin(numbers::PI * t) + 1)) *
+                    numbers::PI * (std::sin(numbers::PI * c_t * t) + 1)) *
                  std::exp(-a_t * t);
 
         Assert(false, ExcNotImplemented());
@@ -3536,18 +3546,24 @@ namespace HeatEquation
       const double a_y;
       const double a_z;
       const double a_t;
+      const double c_t;
     };
 
     class AnalyticalSolution : public Function<dim>
     {
     public:
-      AnalyticalSolution(const double time = 0.0)
+      AnalyticalSolution(const unsigned int numberofref,
+                         const double       time = 0.0)
         : Function<dim>(1, time)
-        , a_x(2.0)
-        , a_y(2.0)
-        , a_z(2.0)
+        , a_x(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_y(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_z(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
-      {}
+        , c_t(4.)
+      {
+        AssertThrow(RightHandSide::const_wave || numberofref >= 2,
+                    ExcMessage("Not enough refinements!"));
+      }
 
       virtual double
       value(const Point<dim> & p,
@@ -3563,12 +3579,12 @@ namespace HeatEquation
         if (dim == 2)
           return std::sin(a_x * numbers::PI * x) *
                  std::sin(a_y * numbers::PI * y) *
-                 (1 + std::sin(numbers::PI * t)) * std::exp(-a_t * t);
+                 (1 + std::sin(numbers::PI * c_t * t)) * std::exp(-a_t * t);
         else if (dim == 3)
           return std::sin(a_x * numbers::PI * x) *
                  std::sin(a_y * numbers::PI * y) *
                  std::sin(a_z * numbers::PI * z) *
-                 (1 + std::sin(numbers::PI * t)) * std::exp(-a_t * t);
+                 (1 + std::sin(numbers::PI * c_t * t)) * std::exp(-a_t * t);
 
         Assert(false, ExcNotImplemented());
 
@@ -3580,6 +3596,7 @@ namespace HeatEquation
       const double a_y;
       const double a_z;
       const double a_t;
+      const double c_t;
     };
   };
 } // namespace HeatEquation
