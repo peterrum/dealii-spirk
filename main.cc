@@ -3489,14 +3489,18 @@ namespace HeatEquation
     class RightHandSide : public Function<dim>
     {
     public:
+       static constexpr bool const_wave = false;
+        
       RightHandSide(const unsigned int numberofref)
         : Function<dim>()
-        , a_x(std::pow(2.0,numberofref)) 
-        , a_y(std::pow(2.0,numberofref))
-        , a_z(std::pow(2.0,numberofref))
+        , a_x(const_wave ? 1.0 : std::pow(2.0,numberofref - 2)) 
+        , a_y(const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
+        , a_z(const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
         , a_t(0.5)
         , c_t(4.)
-      {}
+      {
+          AssertThrow(const_wave || numberofref >= 2, ExcMessage("Not enough refinements!"));
+        }
 
       virtual double
       value(const Point<dim> & p,
@@ -3545,13 +3549,13 @@ namespace HeatEquation
     public:
       AnalyticalSolution(const unsigned int numberofref, const double time = 0.0)
         : Function<dim>(1, time)
-        , a_x(1.0/*std::pow(2.0,numberofref - 2)*/) 
-        , a_y(1.0/*std::pow(2.0,numberofref - 2)*/)
-        , a_z(1.0/*std::pow(2.0,numberofref - 2)*/)
+        , a_x(RightHandSide::const_wave ? 1.0 : std::pow(2.0,numberofref - 2)) 
+        , a_y(RightHandSide::const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
+        , a_z(RightHandSide::const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
         , a_t(0.5)
-        , c_t(1.)
+        , c_t(4.)
       {
-          AssertThrow(numberofref >= 2, ExcMessage("Not enough refinements!"));
+          AssertThrow(RightHandSide::const_wave || numberofref >= 2, ExcMessage("Not enough refinements!"));
       }
 
       virtual double
