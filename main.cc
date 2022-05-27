@@ -3298,7 +3298,9 @@ namespace HeatEquation
       double       time            = 0.0;
       unsigned int timestep_number = 0;
 
-      VectorTools::interpolate(dof_handler, AnalyticalSolution(params.n_refinements,0), solution);
+      VectorTools::interpolate(dof_handler,
+                               AnalyticalSolution(params.n_refinements, 0),
+                               solution);
 
       auto error = output_results(time, timestep_number);
 
@@ -3433,23 +3435,25 @@ namespace HeatEquation
         {
           solution.update_ghost_values();
           Vector<float> norm_per_cell(triangulation.n_active_cells());
-          VectorTools::integrate_difference(dof_handler,
-                                            solution,
-                                            AnalyticalSolution(params.n_refinements,time),
-                                            norm_per_cell,
-                                            QGauss<dim>(fe.degree + 2),
-                                            VectorTools::L2_norm);
+          VectorTools::integrate_difference(
+            dof_handler,
+            solution,
+            AnalyticalSolution(params.n_refinements, time),
+            norm_per_cell,
+            QGauss<dim>(fe.degree + 2),
+            VectorTools::L2_norm);
           const double error_L2_norm =
             VectorTools::compute_global_error(triangulation,
                                               norm_per_cell,
                                               VectorTools::L2_norm);
 
-          VectorTools::integrate_difference(dof_handler,
-                                            solution,
-                                            AnalyticalSolution(params.n_refinements,time),
-                                            norm_per_cell,
-                                            QGauss<dim>(fe.degree + 2),
-                                            VectorTools::Linfty_norm);
+          VectorTools::integrate_difference(
+            dof_handler,
+            solution,
+            AnalyticalSolution(params.n_refinements, time),
+            norm_per_cell,
+            QGauss<dim>(fe.degree + 2),
+            VectorTools::Linfty_norm);
           const double error_Linfty_norm =
             VectorTools::compute_global_error(triangulation,
                                               norm_per_cell,
@@ -3489,18 +3493,19 @@ namespace HeatEquation
     class RightHandSide : public Function<dim>
     {
     public:
-       static constexpr bool const_wave = false;
-        
+      static constexpr bool const_wave = false;
+
       RightHandSide(const unsigned int numberofref)
         : Function<dim>()
-        , a_x(const_wave ? 1.0 : std::pow(2.0,numberofref - 2)) 
-        , a_y(const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
-        , a_z(const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
+        , a_x(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_y(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_z(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
         , c_t(4.)
       {
-          AssertThrow(const_wave || numberofref >= 2, ExcMessage("Not enough refinements!"));
-        }
+        AssertThrow(const_wave || numberofref >= 2,
+                    ExcMessage("Not enough refinements!"));
+      }
 
       virtual double
       value(const Point<dim> & p,
@@ -3547,15 +3552,17 @@ namespace HeatEquation
     class AnalyticalSolution : public Function<dim>
     {
     public:
-      AnalyticalSolution(const unsigned int numberofref, const double time = 0.0)
+      AnalyticalSolution(const unsigned int numberofref,
+                         const double       time = 0.0)
         : Function<dim>(1, time)
-        , a_x(RightHandSide::const_wave ? 1.0 : std::pow(2.0,numberofref - 2)) 
-        , a_y(RightHandSide::const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
-        , a_z(RightHandSide::const_wave ? 1.0 : std::pow(2.0,numberofref - 2))
+        , a_x(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_y(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_z(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
         , c_t(4.)
       {
-          AssertThrow(RightHandSide::const_wave || numberofref >= 2, ExcMessage("Not enough refinements!"));
+        AssertThrow(RightHandSide::const_wave || numberofref >= 2,
+                    ExcMessage("Not enough refinements!"));
       }
 
       virtual double
