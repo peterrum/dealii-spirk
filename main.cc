@@ -62,8 +62,6 @@
 #include <iostream>
 #include <vector>
 
-
-
 using namespace dealii;
 
 using VectorType       = LinearAlgebra::distributed::Vector<double>;
@@ -2966,7 +2964,7 @@ namespace HeatEquation
     double outer_tolerance = 1e-8;
     double inner_tolerance = 1e-6;
 
-    bool do_output_paraview = false; // switch to true in order to output files
+    bool do_output_paraview = true;
 
     void
     parse(const std::string file_name)
@@ -3547,12 +3545,14 @@ namespace HeatEquation
     public:
       AnalyticalSolution(const unsigned int numberofref, const double time = 0.0)
         : Function<dim>(1, time)
-        , a_x(std::pow(2.0,numberofref)) 
-        , a_y(std::pow(2.0,numberofref))
-        , a_z(std::pow(2.0,numberofref))
+        , a_x(1.0/*std::pow(2.0,numberofref - 2)*/) 
+        , a_y(1.0/*std::pow(2.0,numberofref - 2)*/)
+        , a_z(1.0/*std::pow(2.0,numberofref - 2)*/)
         , a_t(0.5)
-        , c_t(4.)
-      {}
+        , c_t(1.)
+      {
+          AssertThrow(numberofref >= 2, ExcMessage("Not enough refinements!"));
+      }
 
       virtual double
       value(const Point<dim> & p,
