@@ -3493,7 +3493,7 @@ namespace HeatEquation
     class RightHandSide : public Function<dim>
     {
     public:
-      static constexpr bool const_wave = false;
+      static constexpr bool const_wave = true;
 
       RightHandSide(const unsigned int numberofref)
         : Function<dim>()
@@ -3501,7 +3501,7 @@ namespace HeatEquation
         , a_y(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_z(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
-        , c_t(4.)
+        , c_t(1.)
       {
         AssertThrow(const_wave || numberofref >= 2,
                     ExcMessage("Not enough refinements!"));
@@ -3559,7 +3559,7 @@ namespace HeatEquation
         , a_y(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_z(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
-        , c_t(4.)
+        , c_t(1.)
       {
         AssertThrow(RightHandSide::const_wave || numberofref >= 2,
                     ExcMessage("Not enough refinements!"));

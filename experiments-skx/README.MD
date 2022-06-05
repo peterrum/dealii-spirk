@@ -102,17 +102,13 @@ cd gmg-batched
 python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
 sbatch node-0016.cmd
 cd ..
-```
 
-```bash
 mkdir -p parameters-complex-q
 cd parameters-complex-q
 python ../../IRK/scripts/parameters_q.py "complex_"
 sbatch ../../IRK/experiments-skx/parameters-0768.cmd
 cd ..
-```
 
-```bash
 mkdir -p parameters-all-q
 cd parameters-all-q
 python ../../IRK/scripts/parameters_all_q.py

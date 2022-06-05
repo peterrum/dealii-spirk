@@ -1,5 +1,5 @@
 { 
-    "FEDegree" : 2,
+    "FEDegree" : 1,
     "NRefinements" : 8,
     "TimeIntegrationScheme" : "spirk", 
     "IRKStages" : "4",
