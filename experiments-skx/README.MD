@@ -52,21 +52,21 @@ cd ..
 mkdir -p large-scaling-2-1
 cd large-scaling-2-1
 python ../../IRK/scripts/large_scaling.py 2 1
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 2048
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
 mkdir -p large-scaling-4-1
 cd large-scaling-4-1
 python ../../IRK/scripts/large_scaling.py 4 1
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 2048
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
 mkdir -p large-scaling-9-1
 cd large-scaling-9-1
 python ../../IRK/scripts/large_scaling.py 9 1
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 2048
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
@@ -75,21 +75,21 @@ cd ..
 mkdir -p large-scaling-2-4
 cd large-scaling-2-4
 python ../../IRK/scripts/large_scaling.py 2 4
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 2048
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
 mkdir -p large-scaling-4-4
 cd large-scaling-4-4
 python ../../IRK/scripts/large_scaling.py 4 4
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 2048
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 
 mkdir -p large-scaling-9-4
 cd large-scaling-9-4
 python ../../IRK/scripts/large_scaling.py 9 4
-python ../../IRK/experiments-skx/large-scaling-create-job-files.py 512
+python ../../IRK/experiments-skx/large-scaling-create-job-files.py 2048
 for cmd in *.cmd; do sbatch $cmd; done
 cd ..
 ```
@@ -97,7 +97,7 @@ cd ..
 # Complex and batched runs (Section 5.4 + 6)
 
 ```bash
-mkdir gmg-batched
+mkdir -p gmg-batched
 cd gmg-batched
 python ../../IRK/experiments-skx/large-scaling-create-job-files-gmg.py 64
 sbatch node-0016.cmd
