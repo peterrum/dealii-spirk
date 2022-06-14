@@ -3092,7 +3092,7 @@ namespace HeatEquation
           mg_triangulations = MGTransferGlobalCoarseningTools::
             create_geometric_coarsening_sequence(triangulation, policy);
 
-          const unsigned int min_level = 1;
+          const unsigned int min_level = 0;
           const unsigned int max_level = mg_triangulations.size() - 1;
 
           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
@@ -3304,6 +3304,8 @@ namespace HeatEquation
 
       auto error = output_results(time, timestep_number);
 
+      constraints.set_zero(solution);
+
       double dx_local = std::numeric_limits<double>::max();
       for (const auto &cell : triangulation.active_cell_iterators())
         dx_local = std::min(dx_local, cell->minimum_vertex_distance());
@@ -3493,15 +3495,15 @@ namespace HeatEquation
     class RightHandSide : public Function<dim>
     {
     public:
-      static constexpr bool const_wave = false;
+      static constexpr bool const_wave = true;
 
       RightHandSide(const unsigned int numberofref)
         : Function<dim>()
-        , a_x(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
-        , a_y(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
-        , a_z(const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_x(const_wave ? 2.0 : std::pow(2.0, numberofref - 2))
+        , a_y(const_wave ? 2.0 : std::pow(2.0, numberofref - 2))
+        , a_z(const_wave ? 2.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
-        , c_t(4.)
+        , c_t(1.)
       {
         AssertThrow(const_wave || numberofref >= 2,
                     ExcMessage("Not enough refinements!"));
@@ -3555,11 +3557,11 @@ namespace HeatEquation
       AnalyticalSolution(const unsigned int numberofref,
                          const double       time = 0.0)
         : Function<dim>(1, time)
-        , a_x(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
-        , a_y(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
-        , a_z(RightHandSide::const_wave ? 1.0 : std::pow(2.0, numberofref - 2))
+        , a_x(RightHandSide::const_wave ? 2.0 : std::pow(2.0, numberofref - 2))
+        , a_y(RightHandSide::const_wave ? 2.0 : std::pow(2.0, numberofref - 2))
+        , a_z(RightHandSide::const_wave ? 2.0 : std::pow(2.0, numberofref - 2))
         , a_t(0.5)
-        , c_t(4.)
+        , c_t(1.)
       {
         AssertThrow(RightHandSide::const_wave || numberofref >= 2,
                     ExcMessage("Not enough refinements!"));
